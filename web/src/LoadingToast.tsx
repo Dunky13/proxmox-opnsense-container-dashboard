@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Warning, X } from '@phosphor-icons/react';
 import type { DashboardRead, DashboardReads, ReadState } from './use-dashboard';
 
@@ -33,7 +33,8 @@ export function LoadingToast({
 }) {
   const [dismissedRefresh, setDismissedRefresh] = useState<number | null>(null);
   const [finishedRefresh, setFinishedRefresh] = useState<number | null>(null);
-  const [focusedRefresh, setFocusedRefresh] = useState<number | null>(null);
+  const toastRef = useRef<HTMLElement>(null);
+  const [focusWithin, setFocusWithin] = useState(false);
   const pending =
     !!reads && readOrder.some((read) => reads[read] === 'pending');
   const visible =
@@ -43,12 +44,17 @@ export function LoadingToast({
     !!reads &&
     readOrder.some((read) => ['cancelled', 'superseded'].includes(reads[read]));
   useEffect(() => {
-    if (!visible || pending || focusedRefresh === refreshId) return;
+    if (
+      !visible ||
+      pending ||
+      toastRef.current?.contains(document.activeElement)
+    )
+      return;
     // Show actual terminal states briefly. Actionable errors remain in the
     // main content after this status-only notification disappears.
     const timer = setTimeout(() => setFinishedRefresh(refreshId), 1200);
     return () => clearTimeout(timer);
-  }, [visible, pending, refreshId, focusedRefresh]);
+  }, [visible, pending, refreshId, focusWithin]);
   const heading = pending
     ? 'Loading dashboard'
     : failed
@@ -70,12 +76,13 @@ export function LoadingToast({
       </div>
       {visible && reads && (
         <aside
+          ref={toastRef}
           className="loading-toast"
           aria-label="Dashboard loading status"
-          onFocusCapture={() => setFocusedRefresh(refreshId)}
+          onFocusCapture={() => setFocusWithin(true)}
           onBlurCapture={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget))
-              setFocusedRefresh(null);
+              setFocusWithin(false);
           }}
         >
           <div className="loading-toast-content">
@@ -118,7 +125,7 @@ export function LoadingToast({
             className="icon-button"
             aria-label="Dismiss loading status"
             onClick={() => {
-              setFocusedRefresh(null);
+              setFocusWithin(false);
               setDismissedRefresh(refreshId);
               onDismiss?.();
             }}

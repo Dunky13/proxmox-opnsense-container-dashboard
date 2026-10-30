@@ -9,7 +9,8 @@ Rows show Loaded only after success, Failed after an error, and Cancelled or Not
 applied for stopped or superseded results. After all reads settle, their actual
 terminal states stay visible for 1.2 seconds before the toast disappears.
 Expiry pauses while keyboard focus is inside the toast and resumes after focus
-leaves; automatic removal does not discard or steal keyboard focus.
+leaves, including when an asynchronous action starts another refresh without
+moving focus. Automatic removal does not discard or steal keyboard focus.
 Actionable errors remain in the main content. Dismissing
 it hides only that refresh's toast, without cancelling reads or suppressing
 errors; a new explicit refresh can show it again. Background activity polling

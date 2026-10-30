@@ -11,44 +11,57 @@ const pending: DashboardReads = {
 };
 afterEach(() => vi.useRealTimers());
 
-it('pauses completion expiry while the toast contains focus and resumes without stealing focus', async () => {
-  vi.useFakeTimers();
-  const onDismiss = vi.fn();
-  function content(reads: DashboardReads) {
-    return (
-      <>
-        <button>Continue outside toast</button>
-        <LoadingToast refreshId={1} reads={reads} onDismiss={onDismiss} />
-      </>
+it.each([false, true])(
+  'pauses completion expiry while focused, including a new refresh: %s',
+  async (newRefresh) => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    function content(reads: DashboardReads, refreshId = 1) {
+      return (
+        <>
+          <button>Continue outside toast</button>
+          <LoadingToast
+            refreshId={refreshId}
+            reads={reads}
+            onDismiss={onDismiss}
+          />
+        </>
+      );
+    }
+    const view = render(content(pending));
+    const close = screen.getByRole('button', {
+      name: 'Dismiss loading status',
+    });
+    act(() => close.focus());
+    if (newRefresh) view.rerender(content(pending, 2));
+    view.rerender(
+      content(
+        {
+          configuration: 'loaded',
+          'provider inventory': 'loaded',
+          jobs: 'loaded',
+          operations: 'loaded',
+        },
+        newRefresh ? 2 : 1,
+      ),
     );
-  }
-  const view = render(content(pending));
-  const close = screen.getByRole('button', { name: 'Dismiss loading status' });
-  act(() => close.focus());
-  view.rerender(
-    content({
-      configuration: 'loaded',
-      'provider inventory': 'loaded',
-      jobs: 'loaded',
-      operations: 'loaded',
-    }),
-  );
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(5000);
-  });
-  expect(close).toHaveFocus();
-  expect(screen.getByRole('complementary')).toBeVisible();
-  const outside = screen.getByRole('button', {
-    name: 'Continue outside toast',
-  });
-  act(() => outside.focus());
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1200);
-  });
-  expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
-  expect(outside).toHaveFocus();
-  expect(onDismiss).not.toHaveBeenCalled();
-});
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(close).toHaveFocus();
+    expect(screen.getByRole('complementary')).toBeVisible();
+    const outside = screen.getByRole('button', {
+      name: 'Continue outside toast',
+    });
+    act(() => outside.focus());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1200);
+    });
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+    expect(outside).toHaveFocus();
+    expect(onDismiss).not.toHaveBeenCalled();
+  },
+);
 
 it('keeps a polite live region mounted before announcements', () => {
   const view = render(<LoadingToast refreshId={1} reads={null} />);

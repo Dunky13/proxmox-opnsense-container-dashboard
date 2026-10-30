@@ -461,6 +461,21 @@ for (const viewport of [
           name: 'Refresh',
           exact: true,
         });
+        // An async action can request another refresh without moving focus.
+        const nextInventory = page.waitForResponse((response) =>
+          response.url().endsWith('/api/v1/reconciliation'),
+        );
+        await refresh.evaluate((button) => {
+          if (!(button instanceof HTMLButtonElement))
+            throw new Error('Refresh control must be a button');
+          button.click();
+        });
+        await nextInventory;
+        await expect(toast.locator('.loading-read.loaded')).toHaveCount(4);
+        await page.clock.fastForward(5000);
+        await expect(close).toBeFocused();
+        await expect(toast).toBeVisible();
+        await capture('focused-next-refresh');
         await refresh.focus();
         await page.clock.fastForward(1200);
         await expect(toast).not.toBeVisible();
