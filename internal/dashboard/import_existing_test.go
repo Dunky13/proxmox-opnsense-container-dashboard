@@ -49,8 +49,8 @@ func hikyoService(t *testing.T) (*Service, *probeProviders, *Store) {
 		}
 		st.DemoResources["demo-edge"] = append(rows,
 			Resource{ID: hikyoReservation, Kind: "reservation", Fields: map[string]string{"subnet": hikyoSubnet, "ip_address": "192.168.6.9", "hw_address": "d0:cc:37:00:06:09", "hostname": "speedtest-tracker", "description": "Existing reservation"}},
-			Resource{ID: hikyoParent, Kind: "domain", Fields: map[string]string{"enabled": "1", "FromDomain": "*.went.io", "accesslist": "", "DisableTls": "0", "DnsChallenge": "1", "CustomCertificate": "", "description": "External wildcard"}},
-			Resource{ID: hikyoChild, Kind: "subdomain", Fields: map[string]string{"enabled": "1", "reverse": hikyoParent, "FromDomain": "hikyo.went.io", "accesslist": "", "description": ""}},
+			Resource{ID: hikyoParent, Kind: "domain", Fields: map[string]string{"enabled": "1", "FromDomain": "*.went.io", "accesslist": "", "basicauth": "", "ClientAuthMode": "", "ClientAuthTrustPool": "", "AcmePassthrough": "", "DisableTls": "0", "DnsChallenge": "1", "CustomCertificate": "", "description": "External wildcard"}},
+			Resource{ID: hikyoChild, Kind: "subdomain", Fields: map[string]string{"enabled": "1", "reverse": hikyoParent, "FromDomain": "hikyo.went.io", "accesslist": "", "basicauth": "", "ClientAuthMode": "", "ClientAuthTrustPool": "", "AcmePassthrough": "", "description": ""}},
 			Resource{ID: hikyoHandle, Kind: "handle", Fields: map[string]string{"enabled": "1", "reverse": hikyoParent, "subdomain": hikyoChild, "HandleType": "handle", "HandleDirective": "reverse_proxy", "ToDomain": "192.168.6.9", "ToPort": "8080", "HttpTls": "0", "HttpTlsInsecureSkipVerify": "0", "accesslist": "", "description": ""}},
 			Resource{ID: "b3333333-3333-4333-8333-333333333000", Kind: "domain", Fields: map[string]string{"enabled": "1", "FromDomain": "*.dbugit.io", "accesslist": ""}},
 			Resource{ID: "b4444444-4444-4444-8444-444444444609", Kind: "subdomain", Fields: map[string]string{"enabled": "1", "reverse": "b3333333-3333-4333-8333-333333333000", "FromDomain": "hikyo.dbugit.io", "accesslist": ""}},
@@ -83,6 +83,40 @@ func TestExistingHikyoDiagnosticsExposeReviewedImport(t *testing.T) {
 		return
 	}
 	t.Fatal("Hikyo missing from reconciliation")
+}
+
+func TestExistingImportRequiresObservedSiteAuthentication(t *testing.T) {
+	for _, site := range []struct{ kind, id string }{{"parent", hikyoParent}, {"child", hikyoChild}} {
+		for _, field := range []string{"basicauth", "ClientAuthMode", "ClientAuthTrustPool", "AcmePassthrough"} {
+			t.Run(site.kind+"/"+field, func(t *testing.T) {
+				s, p, store := hikyoService(t)
+				mutateHikyo(t, store, func(_ *State, rows *[]Resource) {
+					for i := range *rows {
+						if (*rows)[i].ID == site.id {
+							delete((*rows)[i].Fields, field)
+						}
+					}
+				})
+				item := hikyoItem(t, s)
+				if item.ImportAvailable || item.ExistingRoute != nil {
+					t.Fatal("unobserved authentication was reported as an importable public route")
+				}
+				issues := strings.Join(item.ImportIssues, "; ")
+				if !strings.Contains(issues, field) || !strings.Contains(issues, "not observed") {
+					t.Fatal("missing precise authentication observation blocker", issues)
+				}
+				if _, err := s.Plan(context.Background(), PlanRequest{Action: "import", HostID: "main", VMID: 609}); err == nil || !strings.Contains(err.Error(), field) {
+					t.Fatal("import accepted unobserved authentication", err)
+				}
+				if len(p.events) != 0 || len(store.Read().Plans) != 0 {
+					t.Fatal("blocked import wrote provider state or prepared an import plan", p.events)
+				}
+				if _, owned := store.Read().Owned["main:609"]; owned {
+					t.Fatal("blocked import claimed ownership")
+				}
+			})
+		}
+	}
 }
 
 func mutateHikyo(t *testing.T, store *Store, fn func(*State, *[]Resource)) {

@@ -143,7 +143,11 @@ func unsupportedRoute(r Resource) error {
 		return conflict(r.Kind + " " + r.ID + " is disabled; reviewed import requires an enabled route")
 	}
 	for _, field := range []string{"basicauth", "ClientAuthMode", "ClientAuthTrustPool", "AcmePassthrough"} {
-		if r.Fields[field] != "" {
+		value, observed := r.Fields[field]
+		if (r.Kind == "domain" || r.Kind == "subdomain") && !observed {
+			return conflict(r.Kind + " " + r.ID + " " + field + " authentication context was not observed; exposure is unavailable")
+		}
+		if value != "" {
 			return conflict(r.Kind + " " + r.ID + " uses unsupported " + field + "; exposure cannot be represented safely")
 		}
 	}
