@@ -485,7 +485,11 @@ function ContainerRecord({
             {view.exposure}
           </Badge>
         )}
-        <Status value={view.item?.state ?? 'unknown'} />
+        {view.item?.importAvailable ? (
+          <Badge tone="warning">Existing configuration</Badge>
+        ) : (
+          <Status value={view.item?.state ?? 'unknown'} />
+        )}
       </div>
       <ContainerIssues view={view} />
       {mode === 'cards' && (

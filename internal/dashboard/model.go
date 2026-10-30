@@ -462,18 +462,26 @@ type OwnedResource struct {
 	Fingerprint string `json:"fingerprint"`
 }
 type Ownership struct {
-	ResolvedSubnet   *SubnetReference     `json:"resolvedSubnet,omitempty"`
-	SharedAccessList *AccessListReference `json:"sharedAccessList,omitempty"`
-	DesiredRoute     RouteConfig          `json:"desiredRoute"`
-	Key              string               `json:"key"`
-	HostID           string               `json:"hostId"`
-	VMID             int                  `json:"vmid"`
-	OPNsenseID       string               `json:"opnsenseId"`
-	Identity         string               `json:"identity"`
-	Public           bool                 `json:"public"`
-	Resources        []OwnedResource      `json:"resources"`
+	// Imported templates are private durable repair data, never plan effects or
+	// diagnostics. Existing resources are patched only in managed fields.
+	RouteLayout       *RouteLayout         `json:"routeLayout,omitempty"`
+	ResourceTemplates []Resource           `json:"resourceTemplates,omitempty"`
+	ResolvedSubnet    *SubnetReference     `json:"resolvedSubnet,omitempty"`
+	SharedAccessList  *AccessListReference `json:"sharedAccessList,omitempty"`
+	DesiredRoute      RouteConfig          `json:"desiredRoute"`
+	Key               string               `json:"key"`
+	HostID            string               `json:"hostId"`
+	VMID              int                  `json:"vmid"`
+	OPNsenseID        string               `json:"opnsenseId"`
+	Identity          string               `json:"identity"`
+	Public            bool                 `json:"public"`
+	Resources         []OwnedResource      `json:"resources"`
 }
 type Plan struct {
+	RouteLayout      *RouteLayout         `json:"routeLayout,omitempty"`
+	ImportResources  []OwnedResource      `json:"importResources,omitempty"`
+	OwnershipHash    string               `json:"ownershipHash,omitempty"`
+	ConfigHash       string               `json:"configHash,omitempty"`
 	ResolvedSubnet   *SubnetReference     `json:"resolvedSubnet,omitempty"`
 	SharedAccessList *AccessListReference `json:"sharedAccessList,omitempty"`
 	DesiredRoute     RouteConfig          `json:"desiredRoute"`

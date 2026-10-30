@@ -42,7 +42,10 @@ export function containerViews(
     const host = settings.hosts.find((h) => h.id === container.hostId);
     const firewall = settings.opnsenses.find((o) => o.id === host?.opnsenseId);
     const item = data.items.find((i) => i.key === container.key);
-    const route = container.desiredRoute ?? item?.desiredRoute;
+    const route =
+      !item?.owned && item?.existingRoute
+        ? item.existingRoute
+        : (container.desiredRoute ?? item?.desiredRoute ?? item?.existingRoute);
     const distribution =
       container.distribution && container.distribution !== 'unknown'
         ? `${container.distribution}${container.version ? ` ${container.version}` : ' · version unknown'}`
@@ -53,7 +56,11 @@ export function containerViews(
         ? 'Public'
         : 'LAN / VPN'
       : 'Not configured';
-    const config = item ? stateLabel(item.state) : 'Unknown';
+    const config = item?.importAvailable
+      ? 'Existing configuration'
+      : item
+        ? stateLabel(item.state)
+        : 'Unknown';
     const search = [
       container.key,
       container.name,
@@ -83,6 +90,13 @@ export function containerViews(
       config,
       ...container.warnings,
       ...(item?.issues ?? []),
+      ...(item?.importIssues ?? []),
+      ...(item?.existingResources ?? []).flatMap((resource) => [
+        resource.kind,
+        resource.id,
+        resource.name,
+        resource.summary,
+      ]),
     ]
       .join(' ')
       .toLocaleLowerCase();
@@ -187,7 +201,9 @@ export function ensureBlocked(
   if (!view.item || view.item.state === 'unknown')
     return 'Provider state is unknown. Resolve the inventory or firewall read failure and refresh.';
   if (view.item.state === 'conflict')
-    return 'Resolve the conflicting identity or unowned provider resources before planning.';
+    return view.item.importAvailable
+      ? 'Review and import the existing configuration before planning a network change.'
+      : 'Resolve the conflicting identity or unowned provider resources before planning.';
   if (!view.container.identity)
     return 'Container generation is unverified. Add a unique container-dashboard-generation UUID marker in its Proxmox description.';
   if (
@@ -196,6 +212,69 @@ export function ensureBlocked(
     )
   )
     return 'An incomplete network operation needs recovery in Activity.';
+  return '';
+}
+export function importBlocked(
+  view: ContainerView,
+  data: Reconciliation,
+  jobs: Job[],
+  activityLoaded: boolean,
+  jobAttemptState?: JobAttemptState,
+): string {
+  const c = view.container;
+  const observedAt = Date.parse(data.inventory.observedAt);
+  if (
+    view.stale ||
+    !data.inventory.complete ||
+    !Number.isFinite(observedAt) ||
+    Date.now() - observedAt > 5 * 60 * 1000
+  )
+    return 'Current complete inventory is required. Refresh before reviewing an import.';
+  if (!c.identity)
+    return 'Container generation is unverified. Complete identity enrollment and refresh before import.';
+  if (!view.host || !view.firewall || !c.ip || !c.mac || c.template)
+    return 'A verified container, address and linked host/firewall profile are required before import.';
+  const profiles = [view.host, ...(view.host.addressProfiles ?? [])];
+  if (
+    !profiles.some(
+      (profile) => c.vmid >= profile.vmidMin && c.vmid <= profile.vmidMax,
+    ) ||
+    (c.expectedIp && c.expectedIp !== c.ip) ||
+    (c.expectedMac && c.expectedMac.toLowerCase() !== c.mac.toLowerCase()) ||
+    view.item?.issues.some(
+      (issue) =>
+        issue.includes('does not match') && issue.includes('host profile'),
+    )
+  )
+    return 'Container addresses do not match the configured host profile. Resolve the mismatch before import.';
+  if (!activityLoaded)
+    return 'Current activity history is required. Refresh Activity before reviewing an import.';
+  if (
+    jobAttemptState ||
+    jobs.some(
+      (job) => job.key === c.key && (activeJob(job) || uncertainJob(job)),
+    )
+  )
+    return 'An update is active or needs outcome inspection in Activity before import.';
+  if (
+    data.operations.some(
+      (operation) =>
+        operation.key === c.key && operation.status !== 'succeeded',
+    )
+  )
+    return 'An incomplete network operation needs recovery in Activity before import.';
+  if (
+    !view.item?.importAvailable ||
+    view.item.owned ||
+    view.item.state === 'unknown' ||
+    !view.item.existingRoute ||
+    !view.item.existingResources?.length ||
+    view.item.importIssues?.length
+  )
+    return (
+      view.item?.importIssues?.join(' ') ||
+      'No unambiguous matching configuration is available for import. Inspect the existing records and refresh.'
+    );
   return '';
 }
 export function formatTime(value: string): string {

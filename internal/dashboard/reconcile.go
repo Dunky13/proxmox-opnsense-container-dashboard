@@ -6,14 +6,18 @@ import (
 )
 
 type ReconcileItem struct {
-	ResolvedSubnet    *SubnetReference `json:"resolvedSubnet,omitempty"`
-	PrivateAccessList *AccessList      `json:"privateAccessList,omitempty"`
-	Key               string           `json:"key"`
-	State             string           `json:"state"`
-	Issues            []string         `json:"issues"`
-	Owned             bool             `json:"owned"`
-	DesiredRoute      *RouteConfig     `json:"desiredRoute,omitempty"`
-	RouteUnavailable  bool             `json:"routeUnavailable,omitempty"`
+	ImportAvailable   bool               `json:"importAvailable,omitempty"`
+	ImportIssues      []string           `json:"importIssues,omitempty"`
+	ExistingRoute     *RouteConfig       `json:"existingRoute,omitempty"`
+	ExistingResources []ExistingResource `json:"existingResources,omitempty"`
+	ResolvedSubnet    *SubnetReference   `json:"resolvedSubnet,omitempty"`
+	PrivateAccessList *AccessList        `json:"privateAccessList,omitempty"`
+	Key               string             `json:"key"`
+	State             string             `json:"state"`
+	Issues            []string           `json:"issues"`
+	Owned             bool               `json:"owned"`
+	DesiredRoute      *RouteConfig       `json:"desiredRoute,omitempty"`
+	RouteUnavailable  bool               `json:"routeUnavailable,omitempty"`
 }
 type Reconciliation struct {
 	Inventory  Inventory       `json:"inventory"`
@@ -104,62 +108,46 @@ func (s *Service) Reconcile(ctx context.Context) Reconciliation {
 				item.State = "mismatch"
 				item.Issues = append(item.Issues, "owned resources changed or are missing")
 			}
-			d, e := desiredFields(o, c, h, own.Public)
+			_, e := desiredFields(o, c, h, own.Public)
 			if e != nil {
 				item.State = "mismatch"
 				item.Issues = append(item.Issues, "container does not match configured host profile")
 			} else {
-				tls := "0"
-				if o.UpstreamScheme == "https" {
-					tls = "1"
+				if err := verifyRouteLayout(st, o, own, snapshots[h.ID]); err != nil {
+					item.State = "mismatch"
+					item.Issues = append(item.Issues, err.Error())
 				}
-				aclID, domainID := "", ""
-				for _, ref := range own.Resources {
-					if ref.Kind == "acl" {
-						aclID = ref.ID
-					}
-					if ref.Kind == "domain" {
-						domainID = ref.ID
+				if own.RouteLayout != nil {
+					if err := cleanupReferences(own, snapshots[h.ID]); err != nil {
+						item.State = "conflict"
+						item.Issues = append(item.Issues, err.Error())
 					}
 				}
-				if own.Public {
-					aclID = ""
-				} else if o.PrivateAccessListID != "" {
-					aclID = o.PrivateAccessListID
-					if e := verifySharedAccessList(o, snapshots[h.ID], own.SharedAccessList, false); e != nil {
-						item.State = "mismatch"
-						item.Issues = append(item.Issues, "shared private policy changed, is missing or is unsuitable; review a fresh plan")
-					}
+				acl, _ := ownedByKind(own, "acl")
+				site, _ := ownedByKind(own, routeKind(own))
+				specs, err := ownedRouteSpecs(o, h, c, own, snapshots[h.ID], own.Public, acl.ID, site.ID)
+				if err != nil {
+					item.State = "mismatch"
+					item.Issues = append(item.Issues, err.Error())
 				}
-				expected := map[string]map[string]string{"reservation": {"ip_address": d["ip"], "hw_address": d["mac"], "hostname": d["name"], "subnet": o.SubnetID}, "domain": {"FromDomain": d["domain"], "enabled": "1", "CustomCertificate": o.CertificateID, "accesslist": aclID}, "handle": {"ToDomain": d["ip"], "ToPort": itoa(o.UpstreamPort), "enabled": "1", "reverse": domainID, "HttpTls": tls, "HttpTlsInsecureSkipVerify": "0"}}
-				if o.CertificateID == "" {
-					delete(expected["domain"], "CustomCertificate")
+				if err := verifySharedAccessList(o, snapshots[h.ID], own.SharedAccessList, own.Public); err != nil {
+					item.State = "mismatch"
+					item.Issues = append(item.Issues, err.Error())
 				}
-				if !own.Public && o.PrivateAccessListID == "" {
-					expected["acl"] = map[string]string{"clientIps": canonicalCIDRs(o.AllowlistCIDRs), "accesslistInvert": "0", "RequestMatcher": "remote_ip"}
-				}
-				for kind, fields := range expected {
-					found := false
-					for _, ref := range own.Resources {
-						if ref.Kind != kind {
-							continue
-						}
-						r, ok := snapshots[h.ID].Find(ref.ID, kind)
-						if !ok {
-							continue
-						}
-						found = true
-						for k, v := range fields {
-							if r.Fields[k] != v {
-								item.State = "mismatch"
-								item.Issues = append(item.Issues, kind+" differs from desired configuration")
-								break
-							}
-						}
-					}
-					if !found {
+				for kind, fields := range specs {
+					ref, _ := ownedByKind(own, kind)
+					r, exists := snapshots[h.ID].Find(ref.ID, kind)
+					if !exists {
 						item.State = "mismatch"
 						item.Issues = append(item.Issues, "missing owned "+kind)
+						continue
+					}
+					for field, value := range fields {
+						if r.Fields[field] != value {
+							item.State = "mismatch"
+							item.Issues = append(item.Issues, kind+" differs from desired configuration")
+							break
+						}
 					}
 				}
 			}
@@ -170,9 +158,21 @@ func (s *Service) Reconcile(ctx context.Context) Reconciliation {
 				item.Issues = append(item.Issues, "container does not match host profile")
 			} else if e = checkConflicts(snapshots[h.ID], own, d); e != nil {
 				item.State = "conflict"
-				item.Issues = append(item.Issues, "unowned reservation or domain conflicts")
+				item.Issues = append(item.Issues, e.Error())
 			} else {
 				item.Issues = append(item.Issues, "dashboard-owned reservation and proxy are missing")
+			}
+		}
+
+		if !owned && inv.Complete && !failures[h.ID] {
+			candidate := inspectImport(st, inv, h, o, c, snapshots[h.ID])
+			item.ExistingResources = candidate.Existing
+			item.ExistingRoute = candidate.Route
+			item.ImportIssues = candidate.Issues
+			item.ImportAvailable = candidate.eligible()
+			if len(candidate.Existing) > 0 {
+				item.State = "conflict"
+				item.Issues = append(item.Issues, candidate.Issues...)
 			}
 		}
 		for _, op := range out.Operations {

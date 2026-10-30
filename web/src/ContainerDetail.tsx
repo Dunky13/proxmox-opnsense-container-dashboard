@@ -20,6 +20,7 @@ import {
 import { AppIcon, Badge, Field, Notice, Status } from './ui';
 import {
   ensureBlocked,
+  importBlocked,
   formatTime,
   updateBlocked,
   type ContainerView,
@@ -33,17 +34,21 @@ export function PlanReview({
   plan,
   onDone,
   onClose,
+  blockedReason = '',
 }: {
   api: Api;
   plan: Plan;
   onDone: () => Promise<void>;
   onClose: () => void;
+  blockedReason?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [clock, setClock] = useState(Date.now());
   const [publicReviewed, setPublicReviewed] = useState(false);
+  const [ownershipReviewed, setOwnershipReviewed] = useState(false);
   const [consumed, setConsumed] = useState(false);
+  const attempted = useRef(false);
   const mounted = useRef(true);
   const heading = useRef<HTMLHeadingElement | null>(null);
   useEffect(() => {
@@ -58,7 +63,28 @@ export function PlanReview({
   const expired =
     !Number.isFinite(Date.parse(plan.expiresAt)) ||
     clock >= Date.parse(plan.expiresAt);
+  const importing = plan.action === 'import';
+  const invalidImport =
+    importing &&
+    (!plan.effects.some((effect) => effect.action === 'adopt') ||
+      !plan.effects.every(
+        (effect) => effect.action === 'adopt' || effect.action === 'retain',
+      ));
+  const applyDisabled =
+    busy ||
+    expired ||
+    consumed ||
+    !!blockedReason ||
+    invalidImport ||
+    plan.effects.length === 0 ||
+    (plan.public && plan.action !== 'cleanup' && !publicReviewed) ||
+    (importing && !ownershipReviewed);
   async function apply() {
+    if (attempted.current || applyDisabled) return;
+    attempted.current = true;
+    setConsumed(true);
+    setOwnershipReviewed(false);
+    setPublicReviewed(false);
     setBusy(true);
     setError('');
     let succeeded = false;
@@ -68,6 +94,18 @@ export function PlanReview({
         operationSchema,
         { method: 'POST', body: '{}' },
       );
+      if (
+        importing &&
+        (operation.planId !== plan.id ||
+          operation.key !== plan.key ||
+          operation.action !== 'import' ||
+          operation.opnsenseId !== plan.opnsenseId)
+      )
+        throw new ApiError(
+          'Returned operation does not match this import. Inspect Activity before another attempt.',
+          409,
+          'operationMismatch',
+        );
       succeeded = operation.status === 'succeeded';
       if (mounted.current && !succeeded)
         setError(
@@ -76,11 +114,19 @@ export function PlanReview({
     } catch (err) {
       if (mounted.current)
         setError(
-          `${messageOf(err instanceof Error ? err : null)} The response may have been lost after a write. Review Activity and refreshed state before creating a new plan.`,
+          `${messageOf(err instanceof Error ? err : null)} ${importing ? 'The response may have been lost after ownership was recorded.' : 'The response may have been lost after a write.'} Review Activity and refreshed state before creating a new plan. No automatic retry was sent.`,
         );
     } finally {
       // Apply may fail after a provider mutation. Never infer rollback from HTTP failure.
-      await onDone();
+      try {
+        await onDone();
+      } catch {
+        succeeded = false;
+        if (mounted.current)
+          setError(
+            'The outcome refresh failed. Inspect Activity and refresh current state before requesting a new plan.',
+          );
+      }
       if (mounted.current) {
         setBusy(false);
         setConsumed(true);
@@ -89,12 +135,19 @@ export function PlanReview({
     }
   }
   return (
-    <section className="plan-review" aria-label="Review network plan">
+    <section
+      className="plan-review"
+      aria-label={
+        importing ? 'Review existing configuration plan' : 'Review network plan'
+      }
+    >
       <div className="section-heading">
         <h3 ref={heading} tabIndex={-1}>
-          {plan.action === 'cleanup'
-            ? 'Review owned resource cleanup'
-            : 'Review network change'}
+          {importing
+            ? 'Review existing configuration'
+            : plan.action === 'cleanup'
+              ? 'Review owned resource cleanup'
+              : 'Review network change'}
         </h3>
         <button
           className="icon-button"
@@ -111,9 +164,25 @@ export function PlanReview({
           ? 'Deletes only the resources listed below.'
           : `${plan.desiredRoute.scheme.toUpperCase()} upstream, port ${plan.desiredRoute.port}.`}
       </p>
-      {plan.action === 'ensure' && (
+      {importing && (
+        <Notice>
+          Import records ownership in Container Proxy only. It sends no provider
+          create, update, delete or service-apply requests. Existing fields,
+          UUIDs, upstream and access remain unchanged. Future reviewed
+          maintenance and cleanup can update or delete the imported app
+          resources. Shared wildcard parents and shared access lists remain
+          externally owned.
+        </Notice>
+      )}
+      {plan.action !== 'cleanup' && (
         <Badge tone={plan.public ? 'warning' : 'good'}>
-          {plan.public ? 'Public internet access' : 'LAN / VPN allowlist'}
+          {plan.public
+            ? importing
+              ? 'Preserves existing public access'
+              : 'Public internet access'
+            : importing
+              ? 'Preserves existing private access'
+              : 'LAN / VPN allowlist'}
         </Badge>
       )}
       <p className="muted">
@@ -141,12 +210,21 @@ export function PlanReview({
                   <div key={`${change.field}-${i}`}>
                     <dt>{change.field}</dt>
                     <dd>
-                      <span className="change-before">
-                        {change.before || '(empty)'}
-                      </span>
-                      <span aria-hidden="true"> → </span>
-                      <span className="sr-only"> changes to </span>
-                      <strong>{change.after || '(empty)'}</strong>
+                      {importing && change.before === change.after ? (
+                        <span>
+                          {change.before || '(empty)'}{' '}
+                          <span className="muted">(preserved)</span>
+                        </span>
+                      ) : (
+                        <>
+                          <span className="change-before">
+                            {change.before || '(empty)'}
+                          </span>
+                          <span aria-hidden="true"> → </span>
+                          <span className="sr-only"> changes to </span>
+                          <strong>{change.after || '(empty)'}</strong>
+                        </>
+                      )}
                     </dd>
                   </div>
                 ))}
@@ -162,7 +240,19 @@ export function PlanReview({
           ))}
         </ul>
       )}
-      {plan.public && plan.action === 'ensure' && (
+      {importing && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={ownershipReviewed}
+            onChange={(event) => setOwnershipReviewed(event.target.checked)}
+            disabled={busy || consumed}
+          />
+          I reviewed the exact resource UUIDs and accept managed ownership,
+          including future reviewed changes and cleanup of these app resources.
+        </label>
+      )}
+      {plan.public && plan.action !== 'cleanup' && (
         <label className="check">
           <input
             type="checkbox"
@@ -170,8 +260,9 @@ export function PlanReview({
             onChange={(event) => setPublicReviewed(event.target.checked)}
             disabled={busy || consumed}
           />
-          I reviewed the public exposure. This removes the private allowlist
-          attachment for this domain.
+          {importing
+            ? 'I acknowledge this import preserves existing public access. It does not add or remove an access restriction.'
+            : 'I reviewed the public exposure. This removes the private allowlist attachment for this domain.'}
         </label>
       )}
       {expired && (
@@ -179,10 +270,17 @@ export function PlanReview({
           This plan has expired. Close it and review a fresh plan.
         </Notice>
       )}
-      {consumed && (
+      {consumed && !busy && (
         <Notice>
           Apply was attempted. Review refreshed Activity before requesting a new
           plan. This plan cannot be submitted again here.
+        </Notice>
+      )}
+      {blockedReason && <Notice>{blockedReason}</Notice>}
+      {invalidImport && (
+        <Notice>
+          Import returned a provider-changing effect. Close this plan and
+          inspect refreshed state before another review.
         </Notice>
       )}
       {error && (
@@ -194,22 +292,20 @@ export function PlanReview({
         className={
           plan.action === 'cleanup' ? 'button danger-button' : 'button primary'
         }
-        disabled={
-          busy ||
-          expired ||
-          consumed ||
-          plan.effects.length === 0 ||
-          (plan.public && plan.action === 'ensure' && !publicReviewed)
-        }
+        disabled={applyDisabled}
         onClick={() => {
           void apply();
         }}
       >
         {busy
-          ? 'Applying and refreshing…'
-          : plan.action === 'cleanup'
-            ? 'Delete listed owned resources'
-            : 'Apply reviewed change'}
+          ? importing
+            ? 'Importing and refreshing…'
+            : 'Applying and refreshing…'
+          : importing
+            ? 'Import reviewed configuration'
+            : plan.action === 'cleanup'
+              ? 'Delete listed owned resources'
+              : 'Apply reviewed change'}
       </button>
     </section>
   );
@@ -246,20 +342,41 @@ export function ContainerDetail({
 }) {
   const c = view.container;
   const persisted = c.desiredRoute ?? view.item?.desiredRoute;
+  const observedRoute = view.item?.existingRoute;
+  const usingObservedRoute = !view.item?.owned && !!observedRoute;
+  const initialRoute = usingObservedRoute
+    ? observedRoute
+    : (persisted ?? observedRoute);
   const routeUnavailable =
-    !!view.item?.routeUnavailable || (!!view.item?.owned && !persisted);
+    !!view.item?.routeUnavailable ||
+    (!!view.item?.owned && !persisted) ||
+    (!!view.item?.existingResources?.length && !initialRoute);
   const [scheme, setScheme] = useState(
-    persisted?.scheme ?? (routeUnavailable ? '' : 'http'),
+    initialRoute?.scheme ?? (routeUnavailable ? '' : 'http'),
   );
   const [port, setPort] = useState(
-    persisted ? String(persisted.port) : routeUnavailable ? '' : '80',
+    initialRoute ? String(initialRoute.port) : routeUnavailable ? '' : '80',
   );
-  const [isPublic, setPublic] = useState(persisted?.public ?? false);
+  const [isPublic, setPublic] = useState(initialRoute?.public ?? false);
+  const routeDraftEdited = useRef(false);
+  useEffect(() => {
+    if (routeDraftEdited.current || !initialRoute) return;
+    setScheme(initialRoute.scheme);
+    setPort(String(initialRoute.port));
+    setPublic(initialRoute.public);
+  }, [initialRoute]);
   const [plan, setPlan] = useState<Plan | null>(null);
   const reviewButton = useRef<HTMLButtonElement | null>(null);
+  const importButton = useRef<HTMLButtonElement | null>(null);
   const previousPlan = useRef<Plan | null>(null);
+  const importObservation = useRef<Reconciliation | null>(null);
+  const preparing = useRef(false);
   useEffect(() => {
-    if (previousPlan.current && !plan) reviewButton.current?.focus();
+    if (previousPlan.current && !plan)
+      (previousPlan.current.action === 'import' && importButton.current
+        ? importButton.current
+        : reviewButton.current
+      )?.focus();
     previousPlan.current = plan;
   }, [plan]);
   const [busy, setBusy] = useState(false);
@@ -287,6 +404,20 @@ export function ContainerDetail({
     }
   }, [jobToConfirm]);
   const block = ensureBlocked(view, data);
+  const importBlock = importBlocked(
+    view,
+    data,
+    jobs,
+    activityLoaded,
+    jobAttemptState,
+  );
+  const importContext = useRef({ data, block: importBlock });
+  importContext.current = { data, block: importBlock };
+  const showImport =
+    !view.item?.owned &&
+    (!!view.item?.importAvailable ||
+      !!view.item?.existingResources?.length ||
+      !!view.item?.importIssues?.length);
   const parsedPort = Number(port);
   const validScheme = schemeSchema.safeParse(scheme).success;
   const validPort =
@@ -295,25 +426,33 @@ export function ContainerDetail({
     parsedPort >= 1 &&
     parsedPort <= 65535;
   const networkBusy = busy || !!plan;
-  async function review() {
+  async function review(action: 'ensure' | 'import' = 'ensure') {
+    if (preparing.current || plan || (action === 'import' && importBlock))
+      return;
+    preparing.current = true;
+    const observation = data;
     setBusy(true);
     setError('');
     try {
       const next = await api.request('/plans', planSchema, {
         method: 'POST',
         body: JSON.stringify({
-          action: 'ensure',
+          action,
           hostId: c.hostId,
           vmid: c.vmid,
-          public: isPublic,
-          upstreamScheme: scheme,
-          upstreamPort: parsedPort,
+          ...(action === 'ensure'
+            ? {
+                public: isPublic,
+                upstreamScheme: scheme,
+                upstreamPort: parsedPort,
+              }
+            : {}),
         }),
       });
       if (
         next.key !== c.key ||
         next.identity !== c.identity ||
-        next.action !== 'ensure'
+        next.action !== action
       ) {
         throw new ApiError(
           'Container identity changed while preparing the plan. Refreshed inventory must be inspected before requesting a new plan.',
@@ -321,11 +460,38 @@ export function ContainerDetail({
           'identityChanged',
         );
       }
+      if (
+        action === 'import' &&
+        (next.hostId !== c.hostId ||
+          next.vmid !== c.vmid ||
+          next.opnsenseId !== view.firewall?.id ||
+          next.public !== observedRoute?.public ||
+          next.desiredRoute.public !== observedRoute?.public ||
+          next.desiredRoute.scheme !== observedRoute?.scheme ||
+          next.desiredRoute.port !== observedRoute?.port)
+      )
+        throw new ApiError(
+          'The returned import does not match this container and its observed route. Inspect refreshed state before requesting a new plan.',
+          409,
+          'importMismatch',
+        );
+      if (
+        action === 'import' &&
+        (importContext.current.data !== observation ||
+          importContext.current.block)
+      )
+        throw new ApiError(
+          'Observations changed while preparing the import. Inspect refreshed state and request a new plan.',
+          409,
+          'staleImport',
+        );
+      importObservation.current = action === 'import' ? observation : null;
       if (alive.current) setPlan(next);
     } catch (err) {
       if (alive.current) setError(messageOf(err instanceof Error ? err : null));
       await onRefresh();
     } finally {
+      preparing.current = false;
       if (alive.current) setBusy(false);
     }
   }
@@ -400,7 +566,11 @@ export function ContainerDetail({
       </div>
       <div className="badges">
         <Status value={c.status} />
-        <Status value={view.item?.state ?? 'unknown'} />
+        {view.item?.importAvailable ? (
+          <Badge tone="warning">Existing configuration</Badge>
+        ) : (
+          <Status value={view.item?.state ?? 'unknown'} />
+        )}
         {c.template && <Badge>Template</Badge>}
       </div>
       {view.domain &&
@@ -462,22 +632,56 @@ export function ContainerDetail({
           </dd>
         </div>
         <div>
-          <dt>Desired access</dt>
+          <dt>{usingObservedRoute ? 'Observed access' : 'Desired access'}</dt>
           <dd>{view.exposure}</dd>
         </div>
-        {persisted && (
+        {initialRoute && (
           <div className="upstream-fact">
-            <dt>Desired upstream</dt>
+            <dt>
+              {usingObservedRoute ? 'Observed upstream' : 'Desired upstream'}
+            </dt>
             <dd>
               <code>
-                {persisted.scheme}://
-                {c.expectedIp || '(expected IP unavailable)'}:{persisted.port}
+                {initialRoute.scheme}://
+                {usingObservedRoute
+                  ? c.ip
+                  : c.expectedIp || '(expected IP unavailable)'}
+                :{initialRoute.port}
               </code>
             </dd>
           </div>
         )}
       </dl>
-      <ContainerIssues view={view} />
+      <ContainerIssues view={view} expandedResources />
+      {showImport && (
+        <section
+          className="detail-section"
+          aria-label="Existing configuration import"
+        >
+          <h3>Manage existing configuration</h3>
+          <p>
+            Review the exact reservation and app route before recording managed
+            ownership. Import preserves their current values and access,
+            including any stale DHCP hostname. It sends no provider writes.
+          </p>
+          {importBlock && (
+            <p className="disabled-reason" id={`import-block-${c.key}`}>
+              {importBlock}
+            </p>
+          )}
+          <button
+            className="button primary"
+            ref={importButton}
+            disabled={!!importBlock || networkBusy}
+            aria-describedby={importBlock ? `import-block-${c.key}` : undefined}
+            onClick={() => {
+              void review('import');
+            }}
+          >
+            {busy ? 'Preparing plan…' : 'Review existing configuration'}
+          </button>
+        </section>
+      )}
       <section className="detail-section">
         <h3>Network configuration</h3>
         <p className="muted">
@@ -493,7 +697,10 @@ export function ContainerDetail({
                 disabled={networkBusy}
                 onChange={(event) => {
                   const result = schemeSchema.safeParse(event.target.value);
-                  if (result.success) setScheme(result.data);
+                  if (result.success) {
+                    routeDraftEdited.current = true;
+                    setScheme(result.data);
+                  }
                 }}
               >
                 {routeUnavailable && (
@@ -517,7 +724,10 @@ export function ContainerDetail({
                 max={65535}
                 value={port}
                 disabled={networkBusy}
-                onChange={(event) => setPort(event.target.value)}
+                onChange={(event) => {
+                  routeDraftEdited.current = true;
+                  setPort(event.target.value);
+                }}
               />
             )}
           </Field>
@@ -528,7 +738,10 @@ export function ContainerDetail({
               id={id}
               value={isPublic ? 'public' : 'private'}
               disabled={networkBusy}
-              onChange={(event) => setPublic(event.target.value === 'public')}
+              onChange={(event) => {
+                routeDraftEdited.current = true;
+                setPublic(event.target.value === 'public');
+              }}
             >
               <option value="private">LAN / VPN allowlist</option>
               <option value="public">Public internet</option>
@@ -537,8 +750,9 @@ export function ContainerDetail({
         </Field>
         {isPublic && (
           <Notice>
-            Public removes the private access restriction on this domain. You
-            must acknowledge the concrete plan before applying.
+            {showImport
+              ? 'Import preserves the existing public access. A separate reviewed network change is required to change access.'
+              : 'Public removes the private access restriction on this domain. You must acknowledge the concrete plan before applying.'}
           </Notice>
         )}
         {!isPublic && (
@@ -573,8 +787,9 @@ export function ContainerDetail({
         {block && <p className="disabled-reason">{block}</p>}
         {routeUnavailable && !persisted && (
           <Notice>
-            Existing app upstream could not be verified. Choose this app's
-            scheme and port explicitly before repairing its route.
+            {showImport
+              ? 'Existing app upstream could not be verified safely. Resolve the exact import blockers before reviewing ownership or a network change.'
+              : "Existing app upstream could not be verified. Choose this app's scheme and port explicitly before repairing its route."}
           </Notice>
         )}
         {(!validPort || !validScheme) && (
@@ -598,7 +813,23 @@ export function ContainerDetail({
           key={plan.id}
           api={api}
           plan={plan}
-          onDone={onRefresh}
+          blockedReason={
+            plan.action === 'import'
+              ? importBlock ||
+                (importObservation.current !== data
+                  ? 'Observations changed after review. Close this plan, inspect refreshed state and request a new plan.'
+                  : '')
+              : ''
+          }
+          onDone={async () => {
+            if (plan.action === 'import') {
+              routeDraftEdited.current = false;
+              setScheme(plan.desiredRoute.scheme);
+              setPort(String(plan.desiredRoute.port));
+              setPublic(plan.desiredRoute.public);
+            }
+            await onRefresh();
+          }}
           onClose={() => setPlan(null)}
         />
       )}

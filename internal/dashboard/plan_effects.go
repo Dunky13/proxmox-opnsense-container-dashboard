@@ -121,11 +121,11 @@ func desiredResourcesMatch(o OPNsense, h Host, c Container, own Ownership, snap 
 	}
 	o.SubnetID = resolved.ID
 	acl, _ := ownedByKind(own, "acl")
-	domain, ok := ownedByKind(own, "domain")
+	domain, ok := ownedByKind(own, routeKind(own))
 	if !ok {
 		return false
 	}
-	specs, e := routeSpecs(o, h, c, public, acl.ID, domain.ID)
+	specs, e := ownedRouteSpecs(o, h, c, own, snap, public, acl.ID, domain.ID)
 	if e != nil {
 		return false
 	}
@@ -147,7 +147,7 @@ func desiredResourcesMatch(o OPNsense, h Host, c Container, own Ownership, snap 
 	return true
 }
 func effectField(s string) string {
-	names := map[string]string{"hw_address": "macAddress", "ip_address": "ipAddress", "subnet": "subnetId", "FromDomain": "domain", "DisableTls": "disableTls", "CustomCertificate": "certificateId", "accesslist": "accessListId", "accesslistName": "accessListName", "clientIps": "clientCidrs", "accesslistInvert": "inverted", "RequestMatcher": "requestMatcher", "HttpResponseCode": "denyStatus", "ToDomain": "upstreamAddress", "ToPort": "upstreamPort", "HttpTls": "upstreamScheme", "HttpTlsInsecureSkipVerify": "insecureSkipVerify", "reverse": "domainId", "HandleType": "handleType", "HandleDirective": "handleDirective"}
+	names := map[string]string{"hw_address": "macAddress", "ip_address": "ipAddress", "subnet": "subnetId", "FromDomain": "domain", "DisableTls": "disableTls", "CustomCertificate": "certificateId", "accesslist": "accessListId", "accesslistName": "accessListName", "clientIps": "clientCidrs", "accesslistInvert": "inverted", "RequestMatcher": "requestMatcher", "HttpResponseCode": "denyStatus", "ToDomain": "upstreamAddress", "ToPort": "upstreamPort", "HttpTls": "upstreamScheme", "HttpTlsInsecureSkipVerify": "insecureSkipVerify", "reverse": "domainId", "subdomain": "subdomainId", "HandleType": "handleType", "HandleDirective": "handleDirective"}
 	if n, ok := names[s]; ok {
 		return n
 	}
@@ -181,7 +181,7 @@ func planEffects(action string, h Host, o OPNsense, inv Inventory, own Ownership
 	effects := []PlanEffect{}
 	notes := []string{"Changes apply only to the recorded dashboard-owned resource UUIDs.", "Service reconfiguration is required; upstream KEA application may briefly interrupt DHCP."}
 	if action == "cleanup" {
-		for _, kind := range []string{"handle", "domain", "acl", "reservation"} {
+		for _, kind := range cleanupResourceOrder() {
 			for _, ref := range own.Resources {
 				if ref.Kind != kind {
 					continue
@@ -192,13 +192,10 @@ func planEffects(action string, h Host, o OPNsense, inv Inventory, own Ownership
 					effect.Action = "retain"
 					effect.Name = "Owned " + kind + " is already absent; forget its ownership record"
 				}
-				keys := []string{}
-				for k := range r.Fields {
-					keys = append(keys, k)
-				}
+				keys := append([]string{}, observationFields[kind]...)
 				sort.Strings(keys)
 				for _, k := range keys {
-					effect.Changes = append(effect.Changes, FieldChange{effectField(k), effectValue(k, r.Fields[k]), ""})
+					effect.Changes = append(effect.Changes, FieldChange{effectField(k), safeObservation(effectValue(k, r.Fields[k])), ""})
 				}
 				effects = append(effects, effect)
 			}
@@ -217,27 +214,27 @@ func planEffects(action string, h Host, o OPNsense, inv Inventory, own Ownership
 	}
 	o.SubnetID = subnet.ID
 	acl, aclExists := ownedByKind(own, "acl")
-	domain, domainExists := ownedByKind(own, "domain")
+	domain, domainExists := ownedByKind(own, routeKind(own))
 	if aclExists {
 		_, aclExists = snap.Find(acl.ID, "acl")
 	}
 	if domainExists {
-		_, domainExists = snap.Find(domain.ID, "domain")
+		_, domainExists = snap.Find(domain.ID, routeKind(own))
 	}
 	aclID, domainID := acl.ID, domain.ID
 	if !aclExists {
 		aclID = "new:acl"
 	}
 	if !domainExists {
-		domainID = "new:domain"
+		domainID = "new:" + routeKind(own)
 	}
-	specs, e := routeSpecs(o, h, c, route.Public, aclID, domainID)
+	specs, e := ownedRouteSpecs(o, h, c, own, snap, route.Public, aclID, domainID)
 	if e != nil {
 		return nil, nil, e
 	}
 	changed := false
 	ledgerNotes := []string{}
-	for _, kind := range []string{"reservation", "acl", "domain", "handle"} {
+	for _, kind := range routeResourceOrder() {
 		fields, needed := specs[kind]
 		if !needed {
 			if ref, ok := ownedByKind(own, kind); ok {
@@ -269,8 +266,15 @@ func planEffects(action string, h Host, o OPNsense, inv Inventory, own Ownership
 			}
 		}
 		keys := []string{}
-		for k := range fields {
-			keys = append(keys, k)
+		for _, k := range observationFields[kind] {
+			if _, exists := fields[k]; exists {
+				keys = append(keys, k)
+			}
+		}
+		if own.RouteLayout == nil {
+			if _, exists := fields["description"]; exists {
+				keys = append(keys, "description")
+			}
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
@@ -289,7 +293,7 @@ func planEffects(action string, h Host, o OPNsense, inv Inventory, own Ownership
 	if changed {
 		notes = append(notes, "The domain is staged disabled, its ACL is verified, then the domain is enabled before service application.")
 		for i := range effects {
-			if effects[i].Kind == "domain" && effects[i].Action == "retain" {
+			if effects[i].Kind == routeKind(own) && effects[i].Action == "retain" {
 				effects[i].Action = "update"
 				effects[i].Name = "Stage and verify owned domain before enabling"
 			}
@@ -308,6 +312,13 @@ func planEffects(action string, h Host, o OPNsense, inv Inventory, own Ownership
 			notes = append(notes, a.ClientIPContext.Summary, "The reviewed client IP trust context is rechecked before every mutation and service application, including recovery. Global trust lists and headers remain external and unchanged.")
 		}
 		notes = append(notes, "The shared access list remains externally managed and unchanged. It is excluded from dashboard ownership and cleanup.")
+	}
+	if own.RouteLayout != nil {
+		notes = append(notes, "Imported advanced settings are preserved. Only this app's managed network and route fields change; the shared parent, sibling routes and external policies are never updated or deleted.")
+		if own.RouteLayout.Parent != nil {
+			parent, _ := snap.Find(own.RouteLayout.Parent.ID, "domain")
+			effects = append(effects, PlanEffect{Kind: "domain", Action: "retain", ResourceID: parent.ID, Name: "Retain external shared parent; excluded from ownership and cleanup", Changes: resourceObservations(parent)})
+		}
 	}
 	notes = append(notes, "KEA subnet resolved from the intended IPv4: "+subnet.CIDR+" ("+subnet.ID+"). The existing subnet remains unchanged.")
 	return effects, append(notes, ledgerNotes...), nil
