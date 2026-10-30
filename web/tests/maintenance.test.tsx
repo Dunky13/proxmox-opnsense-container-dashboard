@@ -449,9 +449,14 @@ it('review regression: allows reservation-only review beside an existing unowned
   );
 });
 
-it.each([false, undefined])(
-  'blocks reservation repair without positive API eligibility (%s)',
-  async (eligibility) => {
+it.each([
+  { eligibility: false, state: 'healthy' },
+  { eligibility: undefined, state: 'healthy' },
+  { eligibility: false, state: 'conflict' },
+  { eligibility: undefined, state: 'conflict' },
+])(
+  'shows reservation refusal with eligibility=$eligibility and state=$state',
+  async ({ eligibility, state }) => {
     const reason = 'A reservation already exists for this container.';
     const requests = fixtureApi((path) =>
       path === '/reconciliation'
@@ -461,8 +466,8 @@ it.each([false, undefined])(
               {
                 ...reconciliation.items[0],
                 key: container.key,
-                state: 'healthy',
-                owned: true,
+                state,
+                owned: state === 'healthy',
                 canAddReservation: eligibility,
                 reservationBlocked: reason,
               },

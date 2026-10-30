@@ -9,6 +9,72 @@ import (
 	"time"
 )
 
+// Exercise the consuming action methods with the observations verified just
+// before the deadline. The outer ApplyPlan check cannot replace their atomic
+// transaction guard if admission is delayed after those observations.
+func TestReviewSiblingPlanTransactionsRejectDeadlineCrossing(t *testing.T) {
+	for _, action := range []string{"reservation", "accept", "import", "externalCleanup"} {
+		for _, delay := range []time.Duration{time.Second, 2 * time.Second} {
+			t.Run(action+"/"+delay.String(), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					setup := hikyoService
+					if action == "reservation" {
+						setup = demoService
+					}
+					s, p, st := setup(t)
+					req := PlanRequest{Action: action, HostID: "main", VMID: 609}
+					switch action {
+					case "reservation":
+						req.VMID = 604
+					case "accept":
+						req.Public = true
+						importHikyo(t, s)
+						mutateHikyo(t, st, func(_ *State, rows *[]Resource) { changeHikyo(*rows, hikyoReservation, "hostname", "hikyo") })
+					case "externalCleanup":
+						removeHikyo(t, p)
+						req = externalRequest(t, s, []string{hikyoReservation, hikyoChild, hikyoHandle}, true)
+					}
+					plan, err := s.Plan(context.Background(), req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					plan.ExpiresAt = time.Now().Add(time.Second)
+					if err := st.Update(func(next *State) error { next.Plans[plan.ID] = plan; return nil }); err != nil {
+						t.Fatal(err)
+					}
+					state := st.Read()
+					inv := p.Inventory(context.Background(), state.Config)
+					h, _ := state.Config.Host(plan.HostID)
+					o := routerForHost(state.Config, h)
+					snap, err := p.Snapshot(context.Background(), o)
+					if err != nil {
+						t.Fatal(err)
+					}
+					before := fingerprint(state)
+					p.events = nil
+					time.Sleep(delay)
+					switch action {
+					case "reservation":
+						_, err = s.applyReservation(context.Background(), state, plan, h, o, inv, snap)
+					case "accept":
+						_, err = s.applyAccept(context.Background(), state, plan, h, o, inv, snap)
+					case "import":
+						_, err = s.applyImport(context.Background(), state, plan, h, o, inv, snap)
+					case "externalCleanup":
+						_, err = s.applyExternalCleanup(context.Background(), state, plan, h, o, inv, snap)
+					}
+					if err == nil || !strings.Contains(err.Error(), "expired") {
+						t.Fatal("action consumed a plan after verified observations crossed its deadline", err)
+					}
+					if fingerprint(st.Read()) != before || len(p.events) != 0 {
+						t.Fatal("expired transaction changed durable state or providers", p.events)
+					}
+				})
+			})
+		}
+	}
+}
+
 func TestReviewOwnedCleanupRejectsExpiryDuringForeignVerification(t *testing.T) {
 	for _, delay := range []time.Duration{time.Second, 2 * time.Second} {
 		t.Run(delay.String(), func(t *testing.T) {

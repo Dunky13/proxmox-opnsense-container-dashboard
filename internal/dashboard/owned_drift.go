@@ -149,7 +149,9 @@ func (s *Service) applyAccept(ctx context.Context, st State, p Plan, h Host, o O
 	now := time.Now().UTC()
 	op := Operation{ID: newID(), PlanID: p.ID, Key: p.Key, OPNsenseID: o.ID, Action: "accept", Status: "succeeded", Step: "complete", CreatedAt: now, UpdatedAt: now, Resources: own.Resources}
 	err = s.Store.Update(func(next *State) error {
-		delete(next.Plans, p.ID)
+		if err := consumePlan(next, p); err != nil {
+			return err
+		}
 		next.Owned[p.Key] = own
 		next.Operations[op.ID] = op
 		return nil

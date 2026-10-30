@@ -459,6 +459,17 @@ func cleanupDeletionReferences(own Ownership, snap ProviderSnapshot) error {
 	}
 	return nil
 }
+
+// consumePlan runs inside the Store.Update callback that journals the admitted
+// operation. Verification outside that transaction cannot establish its deadline.
+func consumePlan(st *State, plan Plan) error {
+	if !time.Now().Before(plan.ExpiresAt) {
+		return conflict("plan expired during verification")
+	}
+	delete(st.Plans, plan.ID)
+	return nil
+}
+
 func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 	if !s.mutate.TryLock() {
 		return Operation{}, conflict("another mutation is active")
@@ -471,7 +482,7 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 	if !ok {
 		return Operation{}, &Fault{"notFound", "plan not found", 404}
 	}
-	if time.Now().After(plan.ExpiresAt) || plan.Revision != st.Config.Revision {
+	if !time.Now().Before(plan.ExpiresAt) || plan.Revision != st.Config.Revision {
 		return Operation{}, conflict("plan expired or settings changed")
 	}
 	if externalPlanBlocked(st, plan.OPNsenseID, plan.ExternalCleanup) {
@@ -502,7 +513,7 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 	if fingerprint(snap) != plan.ProviderHash {
 		return Operation{}, conflict("provider resources changed; create a fresh plan")
 	}
-	if time.Now().After(plan.ExpiresAt) {
+	if !time.Now().Before(plan.ExpiresAt) {
 		return Operation{}, conflict("plan expired during verification")
 	}
 	if plan.Action == "externalCleanup" {
@@ -635,10 +646,9 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		}
 	}
 	if e = s.Store.Update(func(st *State) error {
-		if !time.Now().Before(plan.ExpiresAt) {
-			return conflict("plan expired during verification")
+		if err := consumePlan(st, plan); err != nil {
+			return err
 		}
-		delete(st.Plans, id)
 		st.Operations[op.ID] = op
 		st.Owned[own.Key] = own
 		return nil

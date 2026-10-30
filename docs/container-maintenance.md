@@ -317,6 +317,9 @@ The UI requires explicit positive reservation eligibility and displays the
 server's refusal reason even when the false eligibility flag is omitted from
 JSON. Owned cleanup rechecks plan expiry inside the transaction that consumes
 the plan, after all foreign-firewall verification reads have finished.
+Every plan-consuming action uses the same transactional expiry guard, including
+reservation repair, metadata acknowledgement, import and external cleanup.
+Action-specific refusal text stays visible alongside broader conflict guidance.
 
 An external cleanup journal retains its original policy hash separately from
 credential material and configuration revision. Credential or CA repairs allowed

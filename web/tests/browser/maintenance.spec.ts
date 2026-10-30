@@ -20,6 +20,9 @@ test('synthetic Hikyo blocked-maintenance flow at matching sizes and system them
     desiredRoute: { scheme: 'http', port: 8080, public: true },
   };
   let sshEnabled = false;
+  let reservationConflict = false;
+  const collisionReason =
+    'A different reservation already uses this IP or MAC.';
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     const body =
@@ -44,12 +47,14 @@ test('synthetic Hikyo blocked-maintenance flow at matching sizes and system them
                 items: [
                   {
                     key: ct.key,
-                    state: 'mismatch',
-                    owned: true,
+                    state: reservationConflict ? 'conflict' : 'mismatch',
+                    owned: !reservationConflict,
                     issues: ['owned resources changed or are missing'],
-                    reservationBlocked: 'owned reservation already exists',
+                    reservationBlocked: reservationConflict
+                      ? collisionReason
+                      : 'owned reservation already exists',
                     desiredRoute: ct.desiredRoute,
-                    canAcceptChanges: true,
+                    canAcceptChanges: !reservationConflict,
                     drift: [
                       {
                         kind: 'reservation',
@@ -187,6 +192,49 @@ test('synthetic Hikyo blocked-maintenance flow at matching sizes and system them
         .getByRole('complementary', { name: 'Details for hikyo' })
         .getByRole('button', { name: 'App update', exact: true }),
     ).toBeEnabled();
+  }
+  reservationConflict = true;
+  sshEnabled = false;
+  for (const size of [
+    { name: 'desktop', width: 1600, height: 1000 },
+    { name: 'mobile', width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(size);
+    await page.goto('/');
+    await page
+      .getByRole('button', { name: 'Configure hikyo, VMID 609' })
+      .click();
+    const detail = page.getByRole('complementary', {
+      name: 'Details for hikyo',
+    });
+    if (!baseline) {
+      const repair = detail.getByRole('button', {
+        name: 'Add missing reservation',
+      });
+      await expect(repair).toBeDisabled();
+      await expect(repair).toHaveAccessibleDescription(
+        new RegExp(collisionReason.replace('.', '\\.')),
+      );
+      await expect(
+        detail.getByText(collisionReason, { exact: true }),
+      ).toBeVisible();
+      await repair.scrollIntoViewIfNeeded();
+    }
+    const loadingToast = page.getByRole('button', {
+      name: 'Dismiss loading status',
+    });
+    if (await loadingToast.isVisible()) await loadingToast.click();
+    await page.screenshot({
+      path: `${evidence}/${baseline ? 'before' : 'after'}-reservation-conflict-${size.name}.png`,
+      fullPage: true,
+    });
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(false);
   }
 });
 

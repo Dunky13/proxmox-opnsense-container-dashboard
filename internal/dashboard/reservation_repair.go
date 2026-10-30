@@ -121,7 +121,9 @@ func (s *Service) applyReservation(ctx context.Context, st State, p Plan, h Host
 	now := time.Now().UTC()
 	op := Operation{ID: newID(), PlanID: p.ID, Action: "reservation", Key: p.Key, OPNsenseID: o.ID, ContainerFingerprint: c.Fingerprint, ResolvedSubnet: subnet, Status: "running", Step: "starting", CreatedAt: now, UpdatedAt: now, Resources: own.Resources}
 	if err = s.Store.Update(func(next *State) error {
-		delete(next.Plans, p.ID)
+		if err := consumePlan(next, p); err != nil {
+			return err
+		}
 		next.Operations[op.ID] = op
 		next.Owned[p.Key] = own
 		return nil

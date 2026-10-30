@@ -498,10 +498,12 @@ func (s *Service) applyExternalCleanup(ctx context.Context, st State, p Plan, h 
 	op.Resources = clone(own.Resources)
 	if err := s.Store.Update(func(next *State) error {
 		current, ok := next.Plans[p.ID]
-		if !ok || fingerprint(current) != fingerprint(p) || externalRouterBlocked(*next, o.ID, req.RecoveryID) || fingerprint(next.Config) != p.ConfigHash || fingerprint(next.Owned) != p.OwnershipHash || time.Now().After(p.ExpiresAt) {
+		if !ok || fingerprint(current) != fingerprint(p) || externalRouterBlocked(*next, o.ID, req.RecoveryID) || fingerprint(next.Config) != p.ConfigHash || fingerprint(next.Owned) != p.OwnershipHash {
 			return conflict("external cleanup plan changed or expired")
 		}
-		delete(next.Plans, p.ID)
+		if err := consumePlan(next, p); err != nil {
+			return err
+		}
 		if next.ExternalCleanups == nil {
 			next.ExternalCleanups = map[string]ExternalCleanupJournal{}
 		}

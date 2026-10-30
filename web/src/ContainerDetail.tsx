@@ -496,6 +496,10 @@ export function ContainerDetail({
       (view.item?.canAddReservation !== true
         ? view.item?.reservationBlocked || 'Reservation repair is unavailable.'
         : '');
+  const reservationRefusal =
+    view.item?.canAddReservation !== true
+      ? view.item?.reservationBlocked
+      : undefined;
   const importBlock = importBlocked(
     view,
     data,
@@ -1023,7 +1027,7 @@ export function ContainerDetail({
           <button
             className="button"
             disabled={networkBusy || !!reservationBlock}
-            title={reservationBlock || undefined}
+            title={reservationRefusal || reservationBlock || undefined}
             aria-describedby={
               reservationBlock ? 'reservation-repair-blocker' : undefined
             }
@@ -1056,6 +1060,12 @@ export function ContainerDetail({
         </div>
         {reservationBlock && (
           <p id="reservation-repair-blocker" className="disabled-reason">
+            {reservationRefusal && reservationRefusal !== reservationBlock && (
+              <>
+                <span>{reservationRefusal}</span>
+                <br />
+              </>
+            )}
             {reservationBlock}
           </p>
         )}
