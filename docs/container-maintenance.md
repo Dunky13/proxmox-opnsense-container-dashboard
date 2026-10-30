@@ -313,6 +313,10 @@ manual proxy without changing or adopting that proxy. Current container and
 reservation collision checks and provider readiness repeat immediately before
 KEA application and during recovery. Action-specific eligibility never permits
 stale inventory or incomplete operations to authorize a repair.
+The UI requires explicit positive reservation eligibility and displays the
+server's refusal reason even when the false eligibility flag is omitted from
+JSON. Owned cleanup rechecks plan expiry inside the transaction that consumes
+the plan, after all foreign-firewall verification reads have finished.
 
 An external cleanup journal retains its original policy hash separately from
 credential material and configuration revision. Credential or CA repairs allowed

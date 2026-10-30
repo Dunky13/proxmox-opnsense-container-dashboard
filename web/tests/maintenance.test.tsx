@@ -288,7 +288,13 @@ it('adds a reservation with an empty app port and no proxy effects', async () =>
           containers: [{ ...container, desiredRoute: undefined }],
         },
         items: [
-          { key: container.key, state: 'missing', owned: false, issues: [] },
+          {
+            key: container.key,
+            state: 'missing',
+            owned: false,
+            issues: [],
+            canAddReservation: true,
+          },
         ],
       });
     if (path === '/plans' && init?.method === 'POST')
@@ -442,6 +448,47 @@ it('review regression: allows reservation-only review beside an existing unowned
     ),
   );
 });
+
+it.each([false, undefined])(
+  'blocks reservation repair without positive API eligibility (%s)',
+  async (eligibility) => {
+    const reason = 'A reservation already exists for this container.';
+    const requests = fixtureApi((path) =>
+      path === '/reconciliation'
+        ? Response.json({
+            ...reconciliation,
+            items: [
+              {
+                ...reconciliation.items[0],
+                key: container.key,
+                state: 'healthy',
+                owned: true,
+                canAddReservation: eligibility,
+                reservationBlocked: reason,
+              },
+            ],
+          })
+        : undefined,
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(
+      await screen.findByRole('button', { name: 'Configure immich, VMID 604' }),
+    );
+    const button = screen.getByRole('button', {
+      name: 'Add missing reservation',
+    });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(reason)).toBeVisible();
+    await user.click(button);
+    expect(
+      requests.mock.calls.filter(
+        ([path, init]) =>
+          String(path).endsWith('/plans') && init?.method === 'POST',
+      ),
+    ).toHaveLength(0);
+  },
+);
 
 it('review regression: exposes independent orphan selection despite a whole-app dependency', async () => {
   fixtureApi(() => undefined);

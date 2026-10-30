@@ -493,8 +493,8 @@ export function ContainerDetail({
   const reservationBlock = view.stale
     ? 'Refresh current inventory before repairing a reservation.'
     : ensureBlocked(reservationView, data) ||
-      (view.item?.canAddReservation === false
-        ? view.item.reservationBlocked || 'Reservation repair is unavailable.'
+      (view.item?.canAddReservation !== true
+        ? view.item?.reservationBlocked || 'Reservation repair is unavailable.'
         : '');
   const importBlock = importBlocked(
     view,
@@ -1024,6 +1024,9 @@ export function ContainerDetail({
             className="button"
             disabled={networkBusy || !!reservationBlock}
             title={reservationBlock || undefined}
+            aria-describedby={
+              reservationBlock ? 'reservation-repair-blocker' : undefined
+            }
             onClick={() => {
               void review('reservation');
             }}
@@ -1051,6 +1054,11 @@ export function ContainerDetail({
             </button>
           )}
         </div>
+        {reservationBlock && (
+          <p id="reservation-repair-blocker" className="disabled-reason">
+            {reservationBlock}
+          </p>
+        )}
         {view.item?.drift?.length && view.item.acceptBlocked ? (
           <p className="disabled-reason">
             Acknowledgement blocked: {view.item.acceptBlocked}

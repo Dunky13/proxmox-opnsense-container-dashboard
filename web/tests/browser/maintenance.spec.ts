@@ -47,6 +47,7 @@ test('synthetic Hikyo blocked-maintenance flow at matching sizes and system them
                     state: 'mismatch',
                     owned: true,
                     issues: ['owned resources changed or are missing'],
+                    reservationBlocked: 'owned reservation already exists',
                     desiredRoute: ct.desiredRoute,
                     canAcceptChanges: true,
                     drift: [
@@ -114,6 +115,12 @@ test('synthetic Hikyo blocked-maintenance flow at matching sizes and system them
         detail.getByRole('button', { name: 'OS update', exact: true }),
       ).toBeDisabled();
       if (!baseline) {
+        await expect(
+          detail.getByRole('button', { name: 'Add missing reservation' }),
+        ).toBeDisabled();
+        await expect(
+          detail.getByText('owned reservation already exists', { exact: true }),
+        ).toBeVisible();
         await expect(detail.getByLabel('Owned resource changes')).toContainText(
           'speedtest-tracker',
         );

@@ -635,6 +635,9 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		}
 	}
 	if e = s.Store.Update(func(st *State) error {
+		if !time.Now().Before(plan.ExpiresAt) {
+			return conflict("plan expired during verification")
+		}
 		delete(st.Plans, id)
 		st.Operations[op.ID] = op
 		st.Owned[own.Key] = own

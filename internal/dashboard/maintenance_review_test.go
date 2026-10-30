@@ -5,7 +5,48 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 )
+
+func TestReviewOwnedCleanupRejectsExpiryDuringForeignVerification(t *testing.T) {
+	for _, delay := range []time.Duration{time.Second, 2 * time.Second} {
+		t.Run(delay.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s, p, st := hikyoService(t)
+				importHikyo(t, s)
+				removeHikyo(t, p)
+				addOwnedCleanupOtherRouter(t, st, false)
+				verifying := false
+				reads := 0
+				s.Providers = &reviewSnapshotProviders{probeProviders: p, observe: func(o OPNsense, snap ProviderSnapshot) ProviderSnapshot {
+					if verifying && o.ID == "other-firewall" {
+						reads++
+						time.Sleep(delay)
+					}
+					return snap
+				}}
+				plan, err := s.Plan(context.Background(), PlanRequest{Action: "cleanup", HostID: "main", VMID: 609})
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan.ExpiresAt = time.Now().Add(time.Second)
+				if err := st.Update(func(next *State) error { next.Plans[plan.ID] = plan; return nil }); err != nil {
+					t.Fatal(err)
+				}
+				before := fingerprint(st.Read())
+				p.events = nil
+				verifying = true
+				if _, err := s.ApplyPlan(context.Background(), plan.ID); err == nil || !strings.Contains(err.Error(), "expired") {
+					t.Fatal("cleanup consumed a plan that expired during foreign verification", err)
+				}
+				if reads != 1 || fingerprint(st.Read()) != before || len(p.events) != 0 {
+					t.Fatal("expired admission consumed the plan, changed ownership, journaled work, or mutated providers", reads, p.events)
+				}
+			})
+		})
+	}
+}
 
 type reviewSnapshotProviders struct {
 	*probeProviders
