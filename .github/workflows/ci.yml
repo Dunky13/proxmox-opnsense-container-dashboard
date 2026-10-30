@@ -1,0 +1,82 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install dependencies
+        run: make deps
+      - name: Check frontend and Go
+        run: make check
+      - name: Build embedded binary
+        run: CGO_ENABLED=0 go build -p 2 -trimpath -o bin/container-proxy ./cmd/dashboard
+      - name: Install browser
+        run: pnpm --dir web exec playwright install --with-deps chromium
+      - name: Verify standalone dashboard in the browser
+        env:
+          DASHBOARD_WEB_URL: http://127.0.0.1:18080
+          DASHBOARD_DEMO_TEST: "1"
+        run: |
+          mkdir -p .local/ci
+          ./bin/container-proxy -demo -listen 127.0.0.1:18080 -state-dir .local/ci/demo > .local/ci/server.log 2>&1 &
+          dashboard_pid=$!
+          trap 'kill "$dashboard_pid" 2>/dev/null || true; wait "$dashboard_pid" 2>/dev/null || true' EXIT
+          curl --retry 20 --retry-delay 1 --retry-connrefused --fail --silent --show-error http://127.0.0.1:18080/healthz
+          pnpm --dir web test:browser
+      - name: Upload dashboard screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dashboard-ui-${{ github.sha }}
+          path: .local/evidence/*.png
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Build and package Linux artifacts
+        run: |
+          make linux-amd64 linux-arm64
+          mkdir -p bin/artifacts
+          for architecture in amd64 arm64; do
+            tar -czf "bin/artifacts/container-proxy-linux-${architecture}.tar.gz" \
+              "bin/container-proxy-linux-${architecture}" \
+              deploy/container-proxy.service deploy/dashboard.env.example README.md
+          done
+          printf '%s\n' "$GITHUB_SHA" > bin/artifacts/SOURCE_COMMIT
+          go version > bin/artifacts/BUILD_TOOLCHAIN
+          cd bin/artifacts
+          sha256sum container-proxy-linux-*.tar.gz > SHA256SUMS
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-proxy-linux-${{ github.sha }}
+          path: bin/artifacts/
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,22 @@
+[Unit]
+Description=Proxmox and OPNsense container dashboard
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=container-proxy
+Group=container-proxy
+WorkingDirectory=/var/lib/container-proxy
+EnvironmentFile=/etc/container-proxy/dashboard.env
+ExecStart=/usr/local/bin/container-proxy -listen :8080 -state-dir /var/lib/container-proxy
+StateDirectory=container-proxy
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target

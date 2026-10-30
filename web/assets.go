@@ -1,0 +1,12 @@
+// Package web embeds the production frontend. Run make web before building Go.
+package web
+
+import (
+	"embed"
+	"io/fs"
+)
+
+//go:embed dist
+var assets embed.FS
+
+func Assets() (fs.FS, error) { return fs.Sub(assets, "dist") }
