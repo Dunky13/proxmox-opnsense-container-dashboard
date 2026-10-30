@@ -33,6 +33,7 @@ export function LoadingToast({
 }) {
   const [dismissedRefresh, setDismissedRefresh] = useState<number | null>(null);
   const [finishedRefresh, setFinishedRefresh] = useState<number | null>(null);
+  const [focusedRefresh, setFocusedRefresh] = useState<number | null>(null);
   const pending =
     !!reads && readOrder.some((read) => reads[read] === 'pending');
   const visible =
@@ -42,12 +43,12 @@ export function LoadingToast({
     !!reads &&
     readOrder.some((read) => ['cancelled', 'superseded'].includes(reads[read]));
   useEffect(() => {
-    if (!visible || pending) return;
+    if (!visible || pending || focusedRefresh === refreshId) return;
     // Show actual terminal states briefly. Actionable errors remain in the
     // main content after this status-only notification disappears.
     const timer = setTimeout(() => setFinishedRefresh(refreshId), 1200);
     return () => clearTimeout(timer);
-  }, [visible, pending, refreshId]);
+  }, [visible, pending, refreshId, focusedRefresh]);
   const heading = pending
     ? 'Loading dashboard'
     : failed
@@ -68,7 +69,15 @@ export function LoadingToast({
           : ''}
       </div>
       {visible && reads && (
-        <aside className="loading-toast" aria-label="Dashboard loading status">
+        <aside
+          className="loading-toast"
+          aria-label="Dashboard loading status"
+          onFocusCapture={() => setFocusedRefresh(refreshId)}
+          onBlurCapture={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget))
+              setFocusedRefresh(null);
+          }}
+        >
           <div className="loading-toast-content">
             <strong>{heading}</strong>
             <ul>
@@ -109,6 +118,7 @@ export function LoadingToast({
             className="icon-button"
             aria-label="Dismiss loading status"
             onClick={() => {
+              setFocusedRefresh(null);
               setDismissedRefresh(refreshId);
               onDismiss?.();
             }}

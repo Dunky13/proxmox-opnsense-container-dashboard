@@ -8,6 +8,8 @@ Pending bars are indeterminate, with no invented percentages or provider stages.
 Rows show Loaded only after success, Failed after an error, and Cancelled or Not
 applied for stopped or superseded results. After all reads settle, their actual
 terminal states stay visible for 1.2 seconds before the toast disappears.
+Expiry pauses while keyboard focus is inside the toast and resumes after focus
+leaves; automatic removal does not discard or steal keyboard focus.
 Actionable errors remain in the main content. Dismissing
 it hides only that refresh's toast, without cancelling reads or suppressing
 errors; a new explicit refresh can show it again. Background activity polling
@@ -35,6 +37,10 @@ VMIDs and disabled mutations. Partial host reads retain observations only
 within the same configuration revision. Both current jobs and operations are
 required before maintenance is enabled; usable inventory alone is insufficient.
 Activity polling failures withdraw that readiness until a full successful refresh.
+Network controls also retain unfinished-operation guards from both reconciliation
+and the independent history read. Pending, failed or older history cannot erase
+an operation already observed by reconciliation; a fresh refresh must observe
+completion before the affected network action becomes available.
 
 Refresh generations, activity epochs, caller cancellation and authentication
 attempts prevent superseded responses from changing current state or ending a

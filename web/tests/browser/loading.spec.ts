@@ -452,8 +452,19 @@ for (const viewport of [
           toast.getByText('Refresh complete', { exact: true }),
         ).toBeVisible();
         await capture('completed-retry');
+        await close.focus();
+        await page.clock.fastForward(5000);
+        await expect(close).toBeFocused();
+        await expect(toast).toBeVisible();
+        await capture('focused-completion');
+        const refresh = page.getByRole('button', {
+          name: 'Refresh',
+          exact: true,
+        });
+        await refresh.focus();
         await page.clock.fastForward(1200);
         await expect(toast).not.toBeVisible();
+        await expect(refresh).toBeFocused();
         await expect(page.getByRole('alert')).not.toBeVisible();
         await expect(
           page.getByRole('button', { name: 'Refresh', exact: true }),

@@ -11,7 +11,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { Api } from '../src/api';
 import { App } from '../src/App';
 import { useDashboard } from '../src/use-dashboard';
-import { auth, job, reconciliation, settings } from './fixtures';
+import type { ReconcileItem } from '../src/schemas';
+import { auth, job, partial, reconciliation, settings } from './fixtures';
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => {};
@@ -48,6 +49,80 @@ afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
 });
+
+it.each(['pending', 'failed', 'empty'])(
+  'keeps reconciliation operation guards when independent history is %s',
+  async (history) => {
+    const held = deferred<Response>();
+    let freshHistory = false;
+    const observed: typeof reconciliation = {
+      ...reconciliation,
+      items: [
+        ...reconciliation.items.map<ReconcileItem>((item) =>
+          item.key === 'main:604'
+            ? { ...item, state: 'mismatch', owned: true }
+            : item,
+        ),
+        {
+          key: 'main:608',
+          state: 'ownedOrphan',
+          owned: true,
+          issues: ['Container is absent.'],
+        },
+      ],
+      operations: [
+        partial,
+        { ...partial, id: 'op-cleanup', key: 'main:608', action: 'cleanup' },
+      ],
+    };
+    const requests = stub((path) => {
+      if (path === '/reconciliation') return json(observed);
+      if (path === '/operations') {
+        if (freshHistory) return json([]);
+        if (history === 'pending') return held.promise;
+        if (history === 'failed') return new Response('{}', { status: 503 });
+        return json([]);
+      }
+      return undefined;
+    });
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Configure immich, VMID 604',
+      }),
+    );
+    expect(
+      screen.getByRole('button', { name: 'Review network change' }),
+    ).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Mismatches/ }));
+    expect(
+      screen.getByRole('button', { name: 'Review owned resource cleanup' }),
+    ).toBeDisabled();
+    if (history === 'pending') {
+      await act(async () => held.resolve(json([])));
+      expect(
+        screen.getByRole('button', { name: 'Review owned resource cleanup' }),
+      ).toBeDisabled();
+    }
+    expect(
+      requests.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(0);
+    observed.operations = [];
+    observed.items = reconciliation.items;
+    freshHistory = true;
+    fireEvent.click(await screen.findByRole('button', { name: /^Refresh$/ }));
+    fireEvent.click(
+      within(
+        screen.getByRole('navigation', { name: 'Main navigation' }),
+      ).getByRole('button', { name: /^Containers$/ }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Review network change' }),
+      ).toBeEnabled(),
+    );
+  },
+);
 
 it.each(['/settings', '/reconciliation', '/jobs', '/operations'])(
   'keeps independent successful reads available while %s is indefinitely pending',

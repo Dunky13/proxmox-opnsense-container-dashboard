@@ -251,15 +251,23 @@ function Dashboard({
     (!Number.isFinite(Date.parse(observedData.inventory.observedAt)) ||
       now - Date.parse(observedData.inventory.observedAt) > 5 * 60 * 1000);
   const data = useMemo(() => {
-    if (!observedData || (dashboard.inventoryValid && !stale))
-      return observedData;
-    return invalidateObservations(
-      observedData,
-      stale
-        ? 'Inventory expired. Refresh to verify current provider state.'
-        : 'Inventory refresh is pending or failed. Previous observations are display only.',
-    );
-  }, [observedData, dashboard.inventoryValid, stale]);
+    if (!observedData) return observedData;
+    const observed =
+      dashboard.inventoryValid && !stale
+        ? observedData
+        : invalidateObservations(
+            observedData,
+            stale
+              ? 'Inventory expired. Refresh to verify current provider state.'
+              : 'Inventory refresh is pending or failed. Previous observations are display only.',
+          );
+    // Either read can observe unfinished work the other has not seen yet.
+    // Preserve every known guard until a fresh refresh observes completion.
+    return {
+      ...observed,
+      operations: [...observed.operations, ...operations],
+    };
+  }, [observedData, dashboard.inventoryValid, stale, operations]);
   const views = useMemo(
     () =>
       dashboard.inventorySettings && data
@@ -559,7 +567,7 @@ function Dashboard({
                 <InventoryView
                   api={api}
                   settings={dashboard.inventorySettings}
-                  data={{ ...data, operations }}
+                  data={data}
                   views={views}
                   filters={filters}
                   setFilters={setFilters}
@@ -581,7 +589,7 @@ function Dashboard({
                 <Mismatches
                   api={api}
                   settings={dashboard.inventorySettings}
-                  data={{ ...data, operations }}
+                  data={data}
                   onInspect={(key) => {
                     setSelected(key);
                     navigate('containers');
