@@ -191,9 +191,11 @@ function OperationEntry({
       <div className="section-heading">
         <div>
           <h3>
-            {operation.action === 'cleanup'
-              ? 'Owned resource cleanup'
-              : 'Network configuration'}{' '}
+            {operation.action === 'import'
+              ? 'Existing configuration import'
+              : operation.action === 'cleanup'
+                ? 'Owned resource cleanup'
+                : 'Network configuration'}{' '}
             <span className="muted">{operation.key}</span>
           </h3>
           <p className="muted">

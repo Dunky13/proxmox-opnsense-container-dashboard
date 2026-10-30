@@ -160,6 +160,17 @@ export const subnetDiscoverySchema = z.object({
   ),
 });
 export const itemSchema = z.object({
+  importAvailable: z.boolean().optional(),
+  importIssues: list(text).optional(),
+  existingRoute: routeSchema.optional(),
+  existingResources: list(
+    z.object({
+      kind: text,
+      id: text,
+      name: text,
+      summary: text,
+    }),
+  ).optional(),
   routeUnavailable: z.boolean().optional(),
   key: text,
   state: z.enum([
@@ -209,7 +220,7 @@ export const planSchema = z.object({
   resolvedSubnet: subnetReferenceSchema.optional(),
   sharedAccessList: accessListReferenceSchema.optional(),
   id: text,
-  action: z.enum(['ensure', 'cleanup']),
+  action: z.enum(['ensure', 'cleanup', 'import']),
   key: text,
   hostId: text,
   vmid: integer,
@@ -225,7 +236,7 @@ export const planSchema = z.object({
   effects: list(
     z.object({
       kind: text,
-      action: z.enum(['create', 'update', 'retain', 'delete']),
+      action: z.enum(['create', 'update', 'retain', 'delete', 'adopt']),
       resourceId: text,
       name: text,
       changes: list(z.object({ field: text, before: text, after: text })),

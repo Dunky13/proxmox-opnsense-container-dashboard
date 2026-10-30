@@ -2,9 +2,12 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"golang.org/x/oauth2"
 )
@@ -199,11 +202,16 @@ func checkConflicts(snap ProviderSnapshot, own Ownership, desired map[string]str
 		if isOwned(r) {
 			continue
 		}
-		if r.Kind == "reservation" && (r.Fields["ip_address"] == desired["ip"] || r.Fields["hw_address"] == desired["mac"]) {
-			return conflict("an unrelated DHCP reservation already uses the IP or MAC")
+		if r.Kind == "reservation" {
+			if match, exact := reservationMatches(r, desired); match {
+				if exact {
+					return conflict(fmt.Sprintf("unowned reservation %s exactly matches IP %s and MAC %s (hostname %s); review existing-resource import", r.ID, desired["ip"], desired["mac"], safeObservation(r.Fields["hostname"])))
+				}
+				return conflict(fmt.Sprintf("reservation %s collides with IP %s or MAC %s; both do not match", r.ID, desired["ip"], desired["mac"]))
+			}
 		}
-		if r.Kind == "domain" && r.Fields["FromDomain"] == desired["domain"] {
-			return conflict("an unrelated Caddy domain already exists")
+		if (r.Kind == "domain" || r.Kind == "subdomain") && domainMatches(r.Fields["FromDomain"], desired["domain"]) {
+			return conflict(fmt.Sprintf("unowned Caddy %s %s matches %s; review existing-resource import", r.Kind, r.ID, desired["domain"]))
 		}
 	}
 	return nil
@@ -220,8 +228,8 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 	if routerBlocked(st, o.ID) {
 		return Plan{}, conflict("OPNsense has unfinished operations")
 	}
-	if req.Action != "ensure" && req.Action != "cleanup" {
-		return Plan{}, bad("action must be ensure or cleanup")
+	if req.Action != "ensure" && req.Action != "cleanup" && req.Action != "import" {
+		return Plan{}, bad("action must be ensure, cleanup or import")
 	}
 	if req.VMID < 100 || req.VMID > 999999999 {
 		return Plan{}, bad("invalid VMID")
@@ -237,7 +245,19 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 	if !snap.Ready {
 		return Plan{}, conflict("OPNsense prerequisites are missing; run connection preflight")
 	}
+	if req.Action == "import" {
+		return s.importPlan(st, req, h, o, inv, snap)
+	}
 	own, owned := st.Owned[key(h.ID, req.VMID)]
+	if req.Action == "ensure" && own.RouteLayout != nil {
+		own.RouteLayout, e = refreshRouteLayout(st, o, own, snap)
+		if e != nil {
+			return Plan{}, e
+		}
+		if e = cleanupReferences(own, snap); e != nil {
+			return Plan{}, e
+		}
+	}
 	if owned && req.Action == "ensure" && !validRoute(own.DesiredRoute) {
 		migrated, err := observedOwnedRoute(own, snap)
 		if err != nil {
@@ -320,7 +340,7 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 	if e != nil {
 		return Plan{}, e
 	}
-	p := Plan{ID: newID(), Action: req.Action, Key: key(h.ID, req.VMID), HostID: h.ID, VMID: req.VMID, OPNsenseID: o.ID, Public: route.Public, DesiredRoute: route, Effects: effects, ApplyNotes: notes, Revision: st.Config.Revision, InventoryHash: inv.StableHash(), ProviderHash: fingerprint(snap), Identity: identity, CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute)}
+	p := Plan{ID: newID(), Action: req.Action, Key: key(h.ID, req.VMID), HostID: h.ID, VMID: req.VMID, OPNsenseID: o.ID, Public: route.Public, DesiredRoute: route, Effects: effects, ApplyNotes: notes, Revision: st.Config.Revision, InventoryHash: inv.StableHash(), ProviderHash: fingerprint(snap), Identity: identity, CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute), RouteLayout: own.RouteLayout, OwnershipHash: fingerprint(st.Owned), ConfigHash: fingerprint(st.Config)}
 	if req.Action == "ensure" {
 		c, _ := inv.Find(p.Key)
 		p.ResolvedSubnet, e = resolveSubnet(snap, h, c)
@@ -341,18 +361,7 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 			return Plan{}, err
 		}
 	}
-	e = s.Store.Update(func(st *State) error {
-		for id, p := range st.Plans {
-			if p.ExpiresAt.Before(now) {
-				delete(st.Plans, id)
-			}
-		}
-		if len(st.Plans) >= 200 {
-			return conflict("too many pending plans")
-		}
-		st.Plans[p.ID] = p
-		return nil
-	})
+	e = s.savePlan(p, now)
 	return p, e
 }
 func cleanupReferences(own Ownership, snap ProviderSnapshot) error {
@@ -365,8 +374,10 @@ func cleanupReferences(own Ownership, snap ProviderSnapshot) error {
 			continue
 		}
 		for _, k := range []string{"reverse", "accesslist", "subdomain"} {
-			if ids[r.Fields[k]] {
-				return conflict("an unrelated resource references owned configuration")
+			for _, id := range strings.FieldsFunc(r.Fields[k], func(c rune) bool { return c == ',' || unicode.IsSpace(c) }) {
+				if ids[id] {
+					return conflict(fmt.Sprintf("unrelated resource %s %s references owned configuration via %s=%s", r.Kind, r.ID, k, id))
+				}
 			}
 		}
 	}
@@ -403,6 +414,12 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 	if routerBlocked(st, plan.OPNsenseID) {
 		return Operation{}, conflict("OPNsense has unfinished operations")
 	}
+	if plan.ConfigHash != "" && plan.ConfigHash != fingerprint(st.Config) {
+		return Operation{}, conflict("configuration changed; create a fresh plan")
+	}
+	if plan.OwnershipHash != "" && plan.OwnershipHash != fingerprint(st.Owned) {
+		return Operation{}, conflict("ownership changed; create a fresh plan")
+	}
 	h, ok := st.Config.Host(plan.HostID)
 	if !ok {
 		return Operation{}, conflict("host removed")
@@ -422,6 +439,12 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 	if fingerprint(snap) != plan.ProviderHash {
 		return Operation{}, conflict("provider resources changed; create a fresh plan")
 	}
+	if time.Now().After(plan.ExpiresAt) {
+		return Operation{}, conflict("plan expired during verification")
+	}
+	if plan.Action == "import" {
+		return s.applyImport(ctx, st, plan, h, o, inv, snap)
+	}
 	if plan.Action == "ensure" {
 		if e = verifySharedAccessList(o, snap, plan.SharedAccessList, plan.Public); e != nil {
 			return Operation{}, e
@@ -432,6 +455,15 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		}
 	}
 	own, owned := st.Owned[plan.Key]
+	if plan.Action == "ensure" && own.RouteLayout != nil {
+		own.RouteLayout = plan.RouteLayout
+		if e = verifyRouteLayout(st, o, own, snap); e != nil {
+			return Operation{}, e
+		}
+		if e = cleanupReferences(own, snap); e != nil {
+			return Operation{}, e
+		}
+	}
 	if owned {
 		existing, err := existingOwnedResources(own, snap)
 		if err != nil {
@@ -644,7 +676,9 @@ func (w *workflow) ensure(h Host, c Container, public bool) error {
 	if desiredResourcesMatch(w.router, h, c, *w.own, w.snap, public) {
 		return nil
 	}
-	specs, e := routeSpecs(w.router, h, c, public, "", "")
+	kind := routeKind(*w.own)
+	siteRef, _ := ownedByKind(*w.own, kind)
+	specs, e := ownedRouteSpecs(w.router, h, c, *w.own, w.snap, public, "", siteRef.ID)
 	if e != nil {
 		return e
 	}
@@ -666,13 +700,17 @@ func (w *workflow) ensure(h Host, c Container, public bool) error {
 			aclID = acl.ID
 		}
 	}
-	specs["domain"]["enabled"] = "0"
-	specs["domain"]["accesslist"] = aclID
-	domain, e := w.upsert("domain", specs["domain"])
+	specs[kind]["enabled"] = "0"
+	specs[kind]["accesslist"] = aclID
+	domain, e := w.upsert(kind, specs[kind])
 	if e != nil {
 		return e
 	}
-	specs["handle"]["reverse"] = domain.ID
+	if kind == "subdomain" {
+		specs["handle"]["subdomain"] = domain.ID
+	} else {
+		specs["handle"]["reverse"] = domain.ID
+	}
 	if _, e = w.upsert("handle", specs["handle"]); e != nil {
 		return e
 	}
@@ -685,7 +723,7 @@ func (w *workflow) ensure(h Host, c Container, public bool) error {
 	if e = checkOwned(*w.own, snap); e != nil {
 		return e
 	}
-	fresh, ok := snap.Find(domain.ID, "domain")
+	fresh, ok := snap.Find(domain.ID, kind)
 	if !ok || fresh.Fields["accesslist"] != aclID {
 		return conflict("domain ACL attachment is not verified")
 	}
@@ -711,7 +749,7 @@ func (w *workflow) ensure(h Host, c Container, public bool) error {
 	if e = w.checkEnsureDependencies(); e != nil {
 		return e
 	}
-	if _, e = w.upsert("domain", map[string]string{"enabled": "1"}); e != nil {
+	if _, e = w.upsert(kind, map[string]string{"enabled": "1"}); e != nil {
 		return e
 	}
 	if e = w.record("reconfigure", false); e != nil {
@@ -760,10 +798,25 @@ func (w *workflow) checkEnsureDependencies() error {
 	if err = verifySubnet(ProviderSnapshot{Resources: rows}, w.host, c, w.op.ResolvedSubnet); err != nil {
 		return err
 	}
+	if w.own.RouteLayout != nil {
+		snap, err := w.s.Providers.Snapshot(w.ctx, w.router)
+		if err != nil {
+			return err
+		}
+		if err = verifyRouteLayout(w.s.Store.Read(), w.router, *w.own, snap); err != nil {
+			return err
+		}
+		if err = checkOwned(*w.own, snap); err != nil {
+			return err
+		}
+		if err = cleanupReferences(*w.own, snap); err != nil {
+			return err
+		}
+	}
 	return w.checkShared(w.own.Public)
 }
 func (w *workflow) cleanup() error {
-	for _, kind := range []string{"handle", "domain", "acl", "reservation"} {
+	for _, kind := range cleanupResourceOrder() {
 		for _, ref := range append([]OwnedResource{}, w.own.Resources...) {
 			if ref.Kind != kind {
 				continue
@@ -890,6 +943,14 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 			return op, e
 		}
 		if op.Action == "ensure" {
+			if e = verifyRouteLayout(st, o, own, snap); e != nil {
+				return op, e
+			}
+			if own.RouteLayout != nil {
+				if e = cleanupReferences(own, snap); e != nil {
+					return op, e
+				}
+			}
 			if e = sharedContextNotOwned(st, o, snap, own.Public); e != nil {
 				return op, e
 			}

@@ -69,6 +69,12 @@ Expected: the service remains active, `/healthz` returns `{"status":"ok"}`, and 
 4. Test the saved connections, then sync. Default profiles map main 601-699 to `192.168.6.0/24` and pvedell 701-799 to `192.168.7.0/24`. MAC suffixes are decimal text: VMID 612 maps to `d0:cc:37:00:06:12` and `192.168.6.12`, not hexadecimal conversion.
 5. Open a container, select that app's upstream scheme and port, review its network plan, then apply. Scheme and port are per-app settings, so applications on the same firewall can use different upstreams. New routes use the private LAN/VPN allowlist. Public exposure requires an explicit reviewed change. A successful saved record is not enough; the app also checks the service-application result.
 
+### Existing reservations and routes
+
+When the app finds an existing reservation or Caddy route, inspect its exact records in the container details. **Review existing configuration** prepares a metadata-only import for an unambiguous matching reservation, app domain or native child domain, and related handle. Review the UUIDs and ownership consequences before importing. An already-public route requires an additional acknowledgement; import preserves its current access and upstream.
+
+Import leaves provider fields, shared wildcard parents and shared access lists unchanged. A stale DHCP hostname remains visible as a managed mismatch, with a separate reviewed network change available to align it. Collisions, shared app records and unsupported route shapes show precise blockers. See [reviewed import](docs/import-existing.md) for eligibility, cleanup boundaries and recovery details.
+
 ### Container identity prerequisite
 
 Inventory is available without enrollment. Before a real container can receive network or update actions, the app requires a trustworthy creation-generation identifier. Current Proxmox LXC schemas do not guarantee one. For these containers, generate a UUID (`cat /proc/sys/kernel/random/uuid` inside Linux), then add `container-dashboard-generation=<UUID>` to that container's Proxmox description. Preserve the rest of the description. Generate a new value for every recreated or cloned container; never copy a generation marker. The app does not modify Proxmox descriptions automatically.

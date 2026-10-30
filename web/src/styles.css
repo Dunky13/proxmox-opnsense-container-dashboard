@@ -1045,6 +1045,21 @@ select:disabled {
   font-family: monospace;
   font-size: 0.75rem;
 }
+.existing-resources {
+  padding-inline-start: 1.25rem;
+  margin-block: 0.75rem;
+}
+.existing-resources code {
+  display: block;
+  margin-block-start: 0.25rem;
+  overflow-wrap: anywhere;
+}
+.container-issues .existing-resources p {
+  margin-block: 0.25rem 0.75rem;
+}
+.import-blockers {
+  margin-block-start: 0.75rem;
+}
 .record-maintenance > div {
   min-width: 0;
 }
@@ -1196,6 +1211,9 @@ select:disabled {
   margin-block: 0.5rem;
   overflow-wrap: anywhere;
   font-size: 0.8125rem;
+}
+.effect > code {
+  overflow-wrap: anywhere;
 }
 .effect dl {
   display: grid;

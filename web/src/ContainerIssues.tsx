@@ -1,10 +1,21 @@
 import type { ContainerView } from './viewmodel';
 import { Field } from './ui';
 
-export function ContainerIssues({ view }: { view: ContainerView }) {
+export function ContainerIssues({
+  view,
+  expandedResources = false,
+}: {
+  view: ContainerView;
+  expandedResources?: boolean;
+}) {
   const c = view.container;
   const issues = view.item?.issues ?? [];
-  const warnings = [...new Set([...c.warnings, ...issues])];
+  const resources = view.item?.existingResources ?? [];
+  const importIssues = view.item?.importIssues ?? [];
+  const warnings = [...new Set([...c.warnings, ...issues])].filter(
+    (issue) =>
+      !resources.length || issue !== 'unowned reservation or domain conflicts',
+  );
   const profileMismatch = issues.some((issue) =>
     [
       'container does not match host profile',
@@ -19,10 +30,54 @@ export function ContainerIssues({ view }: { view: ContainerView }) {
     !profiles.some(
       (profile) => c.vmid >= profile.vmidMin && c.vmid <= profile.vmidMax,
     );
-  if (!warnings.length && c.identity && view.item?.state !== 'conflict')
+  if (
+    !warnings.length &&
+    !resources.length &&
+    !importIssues.length &&
+    c.identity &&
+    view.item?.state !== 'conflict'
+  )
     return null;
   return (
     <div className="container-issues">
+      {resources.length > 0 && (
+        <details
+          className="existing-configuration"
+          open={expandedResources || undefined}
+        >
+          <summary>
+            Existing configuration · {resources.length} resources
+          </summary>
+          <p>
+            {view.item?.owned
+              ? 'These observations describe the current provider configuration. Review any remaining drift before changing it.'
+              : view.item?.importAvailable
+                ? 'Matching records are available for reviewed import. Nothing is imported automatically.'
+                : 'Inspect the matching records and any contradictory values below. Import is unavailable until the blockers are resolved.'}
+          </p>
+          <ul className="existing-resources">
+            {resources.map((resource) => (
+              <li key={`${resource.kind}:${resource.id}`}>
+                <strong>
+                  {resource.kind}: {resource.name || 'Unnamed resource'}
+                </strong>
+                <code>{resource.id}</code>
+                <p>{resource.summary}</p>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {importIssues.length > 0 && (
+        <div className="import-blockers">
+          <strong>Import unavailable</strong>
+          <ul className="warnings">
+            {importIssues.map((issue, index) => (
+              <li key={index}>{issue}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {warnings.length > 0 && (
         <ul className="warnings">
           {warnings.map((warning) => (
@@ -30,24 +85,29 @@ export function ContainerIssues({ view }: { view: ContainerView }) {
           ))}
         </ul>
       )}
-      {!warnings.length && view.item?.state === 'conflict' && (
-        <p>
-          Conflict details were not returned. Refresh before changing this
-          container.
-        </p>
-      )}
-      {view.item?.state === 'conflict' && !profileMismatch && (
-        <details>
-          <summary>Why blocked?</summary>
+      {!warnings.length &&
+        !resources.length &&
+        !importIssues.length &&
+        view.item?.state === 'conflict' && (
           <p>
-            A conflict blocks automatic network changes because the server could
-            not safely match this container to its intended configuration.
-            Inspect the exact reasons above and current provider records before
-            reviewing another plan. Existing foreign resources are not adopted
-            or replaced automatically.
+            Conflict details were not returned. Refresh before changing this
+            container.
           </p>
-        </details>
-      )}
+        )}
+      {view.item?.state === 'conflict' &&
+        !profileMismatch &&
+        !resources.length && (
+          <details>
+            <summary>Why blocked?</summary>
+            <p>
+              A conflict blocks automatic network changes because the server
+              could not safely match this container to its intended
+              configuration. Inspect the exact reasons above and current
+              provider records before reviewing another plan. Existing foreign
+              resources are not adopted or replaced automatically.
+            </p>
+          </details>
+        )}
       {profileMismatch && (
         <details>
           <summary>Why blocked? Address rules</summary>
