@@ -5,6 +5,25 @@ import { useDashboard } from '../src/use-dashboard';
 import { job, reconciliation, settings } from './fixtures';
 
 afterEach(() => vi.unstubAllGlobals());
+it('publishes settings and trustworthy activity while inventory never settles', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.endsWith('/settings'))
+        return new Response(JSON.stringify(settings));
+      if (path.endsWith('/reconciliation'))
+        return new Promise<Response>(() => {});
+      return new Response('[]');
+    }),
+  );
+  const api = new Api('', vi.fn());
+  const { result } = renderHook(() => useDashboard(api));
+  await waitFor(() => expect(result.current.settings).toEqual(settings));
+  expect(result.current.loading).toBe(true);
+  expect(result.current.activityLoaded).toBe(true);
+  expect(result.current.inventoryValid).toBe(false);
+});
 it('keeps a newly created job when an older full refresh completes later', async () => {
   let holdHistory = false;
   let completeHistory: ((response: Response) => void) | undefined;

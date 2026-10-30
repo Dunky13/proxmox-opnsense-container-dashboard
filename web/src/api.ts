@@ -29,6 +29,70 @@ export class Api {
       signal?: AbortSignal;
     } = {},
   ): Promise<T> {
+    // The server allows 90s API work and a 100s socket write. Keep guarded
+    // writes beyond both, including body delivery; never automatically retry.
+    const write = options.method !== undefined && options.method !== 'GET';
+    const deadline = write ? 120_000 : 105_000;
+    const controller = new AbortController();
+    let stopped: Error | null = null;
+    let cancel = () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const boundary = new Promise<never>((_resolve, reject) => {
+      const stop = (error: Error) => {
+        if (stopped) return;
+        stopped = error;
+        controller.abort();
+        reject(error);
+      };
+      cancel = () => stop(new DOMException('Request cancelled.', 'AbortError'));
+      options.signal?.addEventListener('abort', cancel, { once: true });
+      if (options.signal?.aborted) cancel();
+      else
+        timer = setTimeout(
+          () =>
+            stop(
+              new ApiError(
+                write
+                  ? 'The request timed out. Its outcome may be unknown. Inspect Activity and refresh before another attempt. No automatic retry was sent.'
+                  : 'The read timed out. Check your connection and retry refresh.',
+                0,
+                'timeout',
+              ),
+            ),
+          deadline,
+        );
+    });
+    const check = () => {
+      if (stopped) throw stopped;
+    };
+    try {
+      // Race the entire read, not just headers. This also bounds transports
+      // that fail to settle when aborted. Late results have no side effects.
+      return await Promise.race([
+        this.read(
+          path,
+          schema,
+          { ...options, signal: controller.signal },
+          check,
+        ),
+        boundary,
+      ]);
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', cancel);
+    }
+  }
+  private async read<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    options: {
+      method?: 'GET' | 'POST' | 'PUT';
+      body?: string;
+      signal: AbortSignal;
+    },
+    check: () => void,
+  ): Promise<T> {
+    check();
     let response: Response;
     try {
       response = await fetch(`/api/v1${path}`, {
@@ -46,12 +110,14 @@ export class Api {
         ...(options.body !== undefined ? { body: options.body } : {}),
       });
     } catch (error) {
+      check();
       if (error instanceof DOMException && error.name === 'AbortError')
         throw error;
       throw new ApiError(
         'Could not reach Container Proxy. Check your connection and retry.',
       );
     }
+    check();
     if (response.status === 401) {
       this.unauthenticated();
       throw new ApiError(
@@ -60,7 +126,16 @@ export class Api {
         'unauthenticated',
       );
     }
-    const raw = await response.text();
+    let raw: string;
+    try {
+      raw = await response.text();
+    } catch {
+      check();
+      throw new ApiError(
+        'The response could not be read. Check your connection and refresh current state before retrying.',
+      );
+    }
+    check();
     if (!response.ok) {
       try {
         const parsed = errorSchema.safeParse(JSON.parse(raw));
@@ -92,15 +167,18 @@ export class Api {
     );
   }
   async logout(): Promise<void> {
-    const response = await fetch('/api/v1/auth/logout', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
-    });
-    if (!response.ok)
-      throw new ApiError(
-        'Sign out could not be confirmed. Retry before leaving this shared browser.',
-        response.status,
+    try {
+      await this.request(
+        '/auth/logout',
+        z.object({ authenticated: z.literal(false) }),
+        { method: 'POST' },
       );
+    } catch (error) {
+      throw new ApiError(
+        `Sign out could not be confirmed. Retry before leaving this shared browser. ${messageOf(error instanceof Error ? error : null)}`,
+        error instanceof ApiError ? error.status : 0,
+        error instanceof ApiError ? error.code : 'connection',
+      );
+    }
   }
 }

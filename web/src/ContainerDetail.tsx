@@ -7,6 +7,7 @@ import {
   X,
 } from '@phosphor-icons/react';
 import { Api, ApiError, messageOf } from './api';
+import { ContainerIssues } from './ContainerIssues';
 import {
   jobSchema,
   operationSchema,
@@ -476,15 +477,7 @@ export function ContainerDetail({
           </div>
         )}
       </dl>
-      {[...c.warnings, ...(view.item?.issues ?? [])].length > 0 && (
-        <ul className="warnings">
-          {[...new Set([...c.warnings, ...(view.item?.issues ?? [])])].map(
-            (warning) => (
-              <li key={warning}>{warning}</li>
-            ),
-          )}
-        </ul>
-      )}
+      <ContainerIssues view={view} />
       <section className="detail-section">
         <h3>Network configuration</h3>
         <p className="muted">
