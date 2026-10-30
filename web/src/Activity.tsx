@@ -1,3 +1,4 @@
+import { ExternalRecovery } from './ExternalCleanup';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowClockwise, Check } from '@phosphor-icons/react';
 import { Api, messageOf } from './api';
@@ -193,9 +194,15 @@ function OperationEntry({
           <h3>
             {operation.action === 'import'
               ? 'Existing configuration import'
-              : operation.action === 'cleanup'
-                ? 'Owned resource cleanup'
-                : 'Network configuration'}{' '}
+              : operation.action === 'externalCleanup'
+                ? 'External resource cleanup'
+                : operation.action === 'cleanup'
+                  ? 'Owned resource cleanup'
+                  : operation.action === 'accept'
+                    ? 'Observed hostname acknowledgement'
+                    : operation.action === 'reservation'
+                      ? 'Missing reservation repair'
+                      : 'Network configuration'}{' '}
             <span className="muted">{operation.key}</span>
           </h3>
           <p className="muted">
@@ -210,24 +217,32 @@ function OperationEntry({
         <strong>{operation.step || 'Intent recorded'}</strong>
       </p>
       {operation.error && <Notice tone="danger">{operation.error}</Notice>}
-      {operation.resources.length > 0 && (
+      {(operation.cleanupTargets?.length || operation.resources.length > 0) && (
         <details>
           <summary>Recorded resource IDs</summary>
           <ul className="resource-list">
-            {operation.resources.map((resource, i) => (
-              <li key={`${resource.id}-${i}`}>
-                {resource.kind}: <code>{resource.id}</code>
-                {!resource.fingerprint && (
-                  <Badge tone="warning">Readback unverified</Badge>
-                )}
-              </li>
-            ))}
+            {(operation.cleanupTargets ?? operation.resources).map(
+              (resource, i) => (
+                <li key={`${resource.id}-${i}`}>
+                  {resource.kind}: <code>{resource.id}</code>
+                  {!resource.fingerprint && (
+                    <Badge tone="warning">Readback unverified</Badge>
+                  )}
+                </li>
+              ),
+            )}
           </ul>
         </details>
       )}
       {operation.status !== 'succeeded' &&
         operation.status !== 'running' &&
-        (operation.manualRecovery || operation.step !== 'reconfigure' ? (
+        (operation.action === 'externalCleanup' ? (
+          <ExternalRecovery
+            api={api}
+            operation={operation}
+            onRefresh={onRefresh}
+          />
+        ) : operation.manualRecovery || operation.step !== 'reconfigure' ? (
           <Notice>
             <strong>Manual recovery required</strong>
             <p>

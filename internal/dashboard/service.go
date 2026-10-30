@@ -130,7 +130,19 @@ func (s *Service) TestRouter(ctx context.Context, id string) (ProviderSnapshot, 
 	}
 	return s.Providers.Snapshot(ctx, o)
 }
+func routerJobBlocked(st State, id string) bool {
+	for _, j := range st.Jobs {
+		h, ok := st.Config.Host(j.HostID)
+		if ok && h.OPNsenseID == id && jobBlocks(j) {
+			return true
+		}
+	}
+	return false
+}
 func routerBlocked(st State, id string) bool {
+	if routerJobBlocked(st, id) {
+		return true
+	}
 	for _, op := range st.Operations {
 		if op.OPNsenseID == id && op.Status != "succeeded" {
 			return true
@@ -175,6 +187,11 @@ func existingOwnedResources(own Ownership, snap ProviderSnapshot) (Ownership, er
 func cleanupSafe(i Inventory, own Ownership) error {
 	if e := inventoryError(i); e != nil {
 		return e
+	}
+	for _, c := range i.Containers {
+		if c.VMID == own.VMID {
+			return conflict("container still exists; running or stopped containers cannot be cleaned up")
+		}
 	}
 	for _, h := range i.Hosts {
 		for _, g := range h.Guests {
@@ -232,14 +249,23 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 		return Plan{}, bad("unknown host")
 	}
 	o := routerForHost(st.Config, h)
-	if routerBlocked(st, o.ID) {
+	if externalRouterBlocked(st, o.ID, req.RecoveryID) {
 		return Plan{}, conflict("OPNsense has unfinished operations")
 	}
-	if req.Action != "ensure" && req.Action != "cleanup" && req.Action != "import" {
-		return Plan{}, bad("action must be ensure, cleanup or import")
+	if req.Action != "ensure" && req.Action != "cleanup" && req.Action != "externalCleanup" && req.Action != "import" && req.Action != "accept" && req.Action != "reservation" {
+		return Plan{}, bad("action must be ensure, reservation, cleanup, externalCleanup, import or accept")
 	}
 	if req.VMID < 100 || req.VMID > 999999999 {
 		return Plan{}, bad("invalid VMID")
+	}
+	if req.ResourceIDs != nil && len(req.ResourceIDs) == 0 {
+		return Plan{}, bad("select at least one resource, or omit resourceIds for whole-app cleanup")
+	}
+	if req.Action != "cleanup" && len(req.ResourceIDs) > 0 {
+		return Plan{}, bad("resource selection is only supported for cleanup")
+	}
+	if req.Action != "externalCleanup" && (len(req.SelectedResources) > 0 || req.ExternalUseAcknowledged || req.RecoveryID != "") {
+		return Plan{}, bad("external cleanup fields require the externalCleanup action")
 	}
 	inv := s.Providers.Inventory(ctx, st.Config)
 	if e := inventoryError(inv); e != nil {
@@ -251,6 +277,15 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 	}
 	if !snap.Ready {
 		return Plan{}, conflict("OPNsense prerequisites are missing; run connection preflight")
+	}
+	if req.Action == "externalCleanup" {
+		return s.externalCleanupPlan(ctx, st, req, h, o, inv, snap)
+	}
+	if req.Action == "reservation" {
+		return s.reservationPlan(st, req, h, o, inv, snap)
+	}
+	if req.Action == "accept" {
+		return s.acceptPlan(st, req, h, o, inv, snap)
 	}
 	if req.Action == "import" {
 		return s.importPlan(st, req, h, o, inv, snap)
@@ -264,6 +299,9 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 		if e = cleanupReferences(own, snap); e != nil {
 			return Plan{}, e
 		}
+	}
+	if !owned && req.Action == "ensure" && !st.Demo && (req.UpstreamScheme == nil || req.UpstreamPort == nil) {
+		return Plan{}, bad("choose this app upstream scheme and port explicitly")
 	}
 	if owned && req.Action == "ensure" && !validRoute(own.DesiredRoute) {
 		migrated, err := observedOwnedRoute(own, snap)
@@ -284,6 +322,10 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 		if !owned || len(own.Resources) == 0 {
 			return Plan{}, conflict("no dashboard-owned resources")
 		}
+		own, e = selectedCleanup(own, req.ResourceIDs)
+		if e != nil {
+			return Plan{}, e
+		}
 		if own.Identity == "" {
 			return Plan{}, conflict("ownership creation identity is missing")
 		}
@@ -294,6 +336,9 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 			return Plan{}, e
 		}
 		if e = cleanupDeletionReferences(own, snap); e != nil {
+			return Plan{}, e
+		}
+		if e = cleanupTargetConflicts(inv, own, snap); e != nil {
 			return Plan{}, e
 		}
 		identity = own.Identity
@@ -347,7 +392,7 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 	if e != nil {
 		return Plan{}, e
 	}
-	p := Plan{ID: newID(), Action: req.Action, Key: key(h.ID, req.VMID), HostID: h.ID, VMID: req.VMID, OPNsenseID: o.ID, Public: route.Public, DesiredRoute: route, Effects: effects, ApplyNotes: notes, Revision: st.Config.Revision, InventoryHash: inv.StableHash(), ProviderHash: fingerprint(snap), Identity: identity, CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute), RouteLayout: own.RouteLayout, OwnershipHash: fingerprint(st.Owned), ConfigHash: fingerprint(st.Config)}
+	p := Plan{ResourceIDs: req.ResourceIDs, ID: newID(), Action: req.Action, Key: key(h.ID, req.VMID), HostID: h.ID, VMID: req.VMID, OPNsenseID: o.ID, Public: route.Public, DesiredRoute: route, Effects: effects, ApplyNotes: notes, Revision: st.Config.Revision, InventoryHash: inv.StableHash(), ProviderHash: fingerprint(snap), Identity: identity, CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute), RouteLayout: own.RouteLayout, OwnershipHash: fingerprint(st.Owned), ConfigHash: fingerprint(st.Config)}
 	if req.Action == "ensure" {
 		c, _ := inv.Find(p.Key)
 		p.ResolvedSubnet, e = resolveSubnet(snap, h, c)
@@ -380,8 +425,8 @@ func cleanupReferences(own Ownership, snap ProviderSnapshot) error {
 		if ids[r.ID] {
 			continue
 		}
-		for _, k := range []string{"reverse", "accesslist", "subdomain"} {
-			for _, id := range strings.FieldsFunc(r.Fields[k], func(c rune) bool { return c == ',' || unicode.IsSpace(c) }) {
+		for k, value := range r.Fields {
+			for _, id := range strings.FieldsFunc(value, func(c rune) bool { return c == ',' || unicode.IsSpace(c) }) {
 				if ids[id] {
 					return conflict(fmt.Sprintf("unrelated resource %s %s references owned configuration via %s=%s", r.Kind, r.ID, k, id))
 				}
@@ -394,6 +439,10 @@ func cleanupDeletionReferences(own Ownership, snap ProviderSnapshot) error {
 	if err := cleanupReferences(own, snap); err != nil {
 		return err
 	}
+	if err := cleanupReservationReferences(own, snap, false); err != nil {
+		return err
+	}
+
 	for _, r := range own.Resources {
 		if _, exists := snap.Find(r.ID, "acl"); r.Kind == "acl" && exists {
 			general, present := snap.Find("general", "caddyGeneral")
@@ -420,7 +469,7 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 	if time.Now().After(plan.ExpiresAt) || plan.Revision != st.Config.Revision {
 		return Operation{}, conflict("plan expired or settings changed")
 	}
-	if routerBlocked(st, plan.OPNsenseID) {
+	if externalPlanBlocked(st, plan.OPNsenseID, plan.ExternalCleanup) {
 		return Operation{}, conflict("OPNsense has unfinished operations")
 	}
 	if plan.ConfigHash != "" && plan.ConfigHash != fingerprint(st.Config) {
@@ -451,6 +500,15 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 	if time.Now().After(plan.ExpiresAt) {
 		return Operation{}, conflict("plan expired during verification")
 	}
+	if plan.Action == "externalCleanup" {
+		return s.applyExternalCleanup(ctx, st, plan, h, o, inv, snap)
+	}
+	if plan.Action == "reservation" {
+		return s.applyReservation(ctx, st, plan, h, o, inv, snap)
+	}
+	if plan.Action == "accept" {
+		return s.applyAccept(ctx, st, plan, h, o, inv, snap)
+	}
 	if plan.Action == "import" {
 		return s.applyImport(ctx, st, plan, h, o, inv, snap)
 	}
@@ -473,7 +531,7 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 			return Operation{}, e
 		}
 	}
-	if owned {
+	if owned && plan.Action != "cleanup" {
 		existing, err := existingOwnedResources(own, snap)
 		if err != nil {
 			return Operation{}, err
@@ -492,10 +550,18 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		if e = cleanupSafe(inv, own); e != nil {
 			return Operation{}, e
 		}
-		if e = checkOwned(own, snap); e != nil {
+		if _, err := existingOwnedResources(own, snap); err != nil {
+			return Operation{}, err
+		}
+
+		selection, err := selectedCleanup(own, plan.ResourceIDs)
+		if err != nil {
+			return Operation{}, err
+		}
+		if e = cleanupDeletionReferences(selection, snap); e != nil {
 			return Operation{}, e
 		}
-		if e = cleanupDeletionReferences(own, snap); e != nil {
+		if e = cleanupTargetConflicts(inv, selection, snap); e != nil {
 			return Operation{}, e
 		}
 	} else {
@@ -511,7 +577,7 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		}
 	}
 	now := time.Now().UTC()
-	op := Operation{ID: newID(), PlanID: plan.ID, Key: plan.Key, OPNsenseID: o.ID, Action: plan.Action, Status: "running", Step: "starting", CreatedAt: now, UpdatedAt: now, Resources: []OwnedResource{}}
+	op := Operation{ResourceIDs: plan.ResourceIDs, ID: newID(), PlanID: plan.ID, Key: plan.Key, OPNsenseID: o.ID, Action: plan.Action, Status: "running", Step: "starting", CreatedAt: now, UpdatedAt: now, Resources: []OwnedResource{}}
 	if plan.Action == "ensure" {
 		container, _ := inv.Find(plan.Key)
 		op.ContainerFingerprint = container.Fingerprint
@@ -535,6 +601,27 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		o.SubnetID = plan.ResolvedSubnet.ID
 	}
 	op.Resources = append([]OwnedResource{}, own.Resources...)
+	if plan.Action == "cleanup" {
+		selection, err := selectedCleanup(own, plan.ResourceIDs)
+		if err != nil {
+			return Operation{}, err
+		}
+		op.CleanupTargets = append([]OwnedResource{}, selection.Resources...)
+		for _, ref := range selection.Resources {
+			if r, exists := snap.Find(ref.ID, ref.Kind); exists {
+				found := false
+				for i, t := range own.ResourceTemplates {
+					if t.Kind == ref.Kind {
+						own.ResourceTemplates[i] = clone(r)
+						found = true
+					}
+				}
+				if !found {
+					own.ResourceTemplates = append(own.ResourceTemplates, clone(r))
+				}
+			}
+		}
+	}
 	if e = s.Store.Update(func(st *State) error {
 		delete(st.Plans, id)
 		st.Operations[op.ID] = op
@@ -566,10 +653,12 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 	op.UpdatedAt = time.Now().UTC()
 	e = s.Store.Update(func(st *State) error {
 		st.Operations[op.ID] = op
-		if plan.Action == "cleanup" {
+		if plan.Action == "cleanup" && len(own.Resources) == 0 {
 			delete(st.Owned, own.Key)
 		} else {
-			own.Public = plan.Public
+			if plan.Action == "ensure" {
+				own.Public = plan.Public
+			}
 			st.Owned[own.Key] = own
 		}
 		return nil
@@ -578,6 +667,7 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 }
 
 type workflow struct {
+	external  *ExternalCleanupJournal
 	host      Host
 	container Container
 	s         *Service
@@ -593,7 +683,18 @@ func (w *workflow) record(step string, uncertain bool) error {
 	w.op.ManualRecovery = uncertain
 	w.op.Resources = append([]OwnedResource{}, w.own.Resources...)
 	w.op.UpdatedAt = time.Now().UTC()
-	return w.s.Store.Update(func(st *State) error { st.Operations[w.op.ID] = *w.op; st.Owned[w.own.Key] = *w.own; return nil })
+	return w.s.Store.Update(func(st *State) error {
+		st.Operations[w.op.ID] = *w.op
+		if w.external != nil {
+			if st.ExternalCleanups == nil {
+				st.ExternalCleanups = map[string]ExternalCleanupJournal{}
+			}
+			st.ExternalCleanups[w.op.ID] = *w.external
+		} else {
+			st.Owned[w.own.Key] = *w.own
+		}
+		return nil
+	})
 }
 func (w *workflow) upsert(kind string, fields map[string]string) (Resource, error) {
 	var old Resource
@@ -676,6 +777,16 @@ func (w *workflow) upsert(kind string, fields map[string]string) (Resource, erro
 	}
 	if !found {
 		w.snap.Resources = append(w.snap.Resources, r)
+	}
+	updatedTemplate := false
+	for i, template := range w.own.ResourceTemplates {
+		if template.Kind == kind {
+			w.own.ResourceTemplates[i] = clone(r)
+			updatedTemplate = true
+		}
+	}
+	if !updatedTemplate {
+		w.own.ResourceTemplates = append(w.own.ResourceTemplates, clone(r))
 	}
 	return r, w.record("recorded:"+kind, true)
 }
@@ -825,8 +936,18 @@ func (w *workflow) checkEnsureDependencies() error {
 	return w.checkShared(w.own.Public)
 }
 func (w *workflow) cleanup() error {
+	selection, err := selectedCleanup(*w.own, w.op.ResourceIDs)
+	if err != nil {
+		return err
+	}
+	changed := false
 	for _, kind := range cleanupResourceOrder() {
-		for _, ref := range append([]OwnedResource{}, w.own.Resources...) {
+		if kind == "reservation" && w.external != nil {
+			if err := w.externalApplication("caddy", selection); err != nil {
+				return err
+			}
+		}
+		for _, ref := range append([]OwnedResource{}, selection.Resources...) {
 			if ref.Kind != kind {
 				continue
 			}
@@ -842,43 +963,110 @@ func (w *workflow) cleanup() error {
 			if e != nil {
 				return e
 			}
-			if e = checkOwned(*w.own, latest); e != nil {
+			if e = checkedSnapshot(latest); e != nil {
 				return e
 			}
-			if e = cleanupDeletionReferences(*w.own, latest); e != nil {
+			if e = w.externalGuard(latestInventory, latest); e != nil {
+				return e
+			}
+			if e = verifyCleanedTargets(*w.own, w.op.CleanupTargets, latest); e != nil {
+				return e
+			}
+			if _, e = existingOwnedResources(*w.own, latest); e != nil {
+				return e
+			}
+
+			if e = cleanupDeletionReferences(selection, latest); e != nil {
+				return e
+			}
+			if e = cleanupTargetConflicts(latestInventory, selection, latest); e != nil {
 				return e
 			}
 			w.snap = latest
 			r, ok := w.snap.Find(ref.ID, kind)
-			if !ok || r.Fingerprint() != ref.Fingerprint {
-				return conflict("owned resource changed")
+			if ok {
+				if r.Fingerprint() != ref.Fingerprint {
+					return conflict("owned resource changed")
+				}
+				if e := w.record("delete:"+kind, true); e != nil {
+					return e
+				}
+				if e := w.s.Providers.Delete(w.ctx, w.router, r); e != nil {
+					return e
+				}
+				changed = true
 			}
-			if e := w.record("delete:"+kind, true); e != nil {
-				return e
+			if w.external != nil {
+				w.external.Deleted[ref.ID] = true
 			}
-			if e := w.s.Providers.Delete(w.ctx, w.router, r); e != nil {
-				return e
-			}
+
 			for i, x := range w.own.Resources {
 				if x.ID == ref.ID && x.Kind == kind {
 					w.own.Resources = append(w.own.Resources[:i], w.own.Resources[i+1:]...)
 					break
 				}
 			}
-			if e := w.record("deleted:"+kind, true); e != nil {
+			if e := w.record("deleted:"+kind, ok); e != nil {
 				return e
 			}
 		}
+	}
+	if w.external != nil {
+		if err := w.externalApplication("caddy", selection); err != nil {
+			return err
+		}
+		return w.externalApplication("kea", selection)
+	}
+	if !changed {
+		return nil
 	}
 	if e := w.record("reconfigure", false); e != nil {
 		return e
 	}
 	for _, service := range serviceApplicationOrder("cleanup") {
-		if e := w.s.Providers.Apply(w.ctx, w.router, service); e != nil {
-			return e
+		if err := w.applyCleanupService(service, selection); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+func (w *workflow) applyCleanupService(service string, selection Ownership) error {
+	inv := w.s.Providers.Inventory(w.ctx, w.s.Store.Read().Config)
+	if e := cleanupSafe(inv, *w.own); e != nil {
+		return e
+	}
+	snap, e := w.s.Providers.Snapshot(w.ctx, w.router)
+	if e != nil {
+		return e
+	}
+	if !snap.Ready {
+		return conflict("provider prerequisites unavailable")
+	}
+	if e = w.externalGuard(inv, snap); e != nil {
+		return e
+	}
+	if e = verifyCleanedTargets(*w.own, w.op.CleanupTargets, snap); e != nil {
+		return e
+	}
+	if _, e = existingOwnedResources(*w.own, snap); e != nil {
+		return e
+	}
+	if e = cleanupDeletionReferences(selection, snap); e != nil {
+		return e
+	}
+	if e = cleanupReservationReferences(selection, snap, true); e != nil {
+		return e
+	}
+	if e = cleanupTargetConflicts(inv, selection, snap); e != nil {
+		return e
+	}
+
+	if w.external != nil {
+		if e := w.record("apply:"+service, true); e != nil {
+			return e
+		}
+	}
+	return w.s.Providers.Apply(w.ctx, w.router, service)
 }
 func serviceApplicationOrder(action string) [2]string {
 	if action == "cleanup" {
@@ -897,8 +1085,14 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 	if !ok {
 		return op, &Fault{"notFound", "operation not found", 404}
 	}
+	if routerJobBlocked(st, op.OPNsenseID) {
+		return op, conflict("linked firewall has an active or uncertain update job")
+	}
 	if op.Status == "succeeded" {
 		return op, conflict("operation already completed")
+	}
+	if op.Action == "externalCleanup" {
+		return op, conflict("external cleanup requires fresh inspection and a new acknowledged review plan; generic owned recovery is unavailable")
 	}
 	if op.ManualRecovery || op.Step != "reconfigure" {
 		return op, conflict("write outcome or workflow is incomplete; manual provider inspection is required")
@@ -912,6 +1106,28 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 		return op, conflict("owned host is missing")
 	}
 	o := routerForHost(st.Config, h)
+	if op.Action == "reservation" {
+		inv := s.Providers.Inventory(ctx, st.Config)
+		c, e := ensureContainer(inv, h, own.VMID)
+		if e != nil {
+			return op, e
+		}
+		if c.Identity != own.Identity || c.Fingerprint != op.ContainerFingerprint {
+			return op, conflict("container changed before reservation recovery")
+		}
+		if e = s.verifyReservationApplication(ctx, h, o, c, own, op.ResolvedSubnet); e != nil {
+			return op, e
+		}
+		if e = s.Providers.Apply(ctx, o, "kea"); e != nil {
+			return op, e
+		}
+		op.Status = "succeeded"
+		op.Step = "complete"
+		op.Error = ""
+		op.UpdatedAt = time.Now().UTC()
+		e = s.Store.Update(func(next *State) error { next.Operations[op.ID] = op; return nil })
+		return op, e
+	}
 	for _, service := range serviceApplicationOrder(op.Action) {
 		inv := s.Providers.Inventory(ctx, st.Config)
 		if e := inventoryError(inv); e != nil {
@@ -950,9 +1166,15 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 		if !snap.Ready {
 			return op, conflict("OPNsense prerequisites must be restored before recovery")
 		}
-		if e = checkOwned(own, snap); e != nil {
+		if op.Action == "cleanup" {
+			_, e = existingOwnedResources(own, snap)
+		} else {
+			e = checkOwned(own, snap)
+		}
+		if e != nil {
 			return op, e
 		}
+
 		if op.Action == "ensure" {
 			if e = verifyRouteLayout(st, o, own, snap); e != nil {
 				return op, e
@@ -982,8 +1204,23 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 			if !desiredResourcesMatch(o, h, c, own, snap, own.Public) {
 				return op, conflict("recorded route differs from current desired configuration")
 			}
-		} else if e = cleanupDeletionReferences(own, snap); e != nil {
-			return op, e
+		} else {
+			targets := own
+			if len(op.CleanupTargets) > 0 {
+				targets.Resources = op.CleanupTargets
+			}
+			if e = verifyCleanedTargets(own, op.CleanupTargets, snap); e != nil {
+				return op, e
+			}
+			if e = cleanupDeletionReferences(targets, snap); e != nil {
+				return op, e
+			}
+			if e = cleanupReservationReferences(targets, snap, true); e != nil {
+				return op, e
+			}
+			if e = cleanupTargetConflicts(inv, targets, snap); e != nil {
+				return op, e
+			}
 		}
 		if e = s.Providers.Apply(ctx, o, service); e != nil {
 			return op, e
@@ -995,7 +1232,7 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 	op.UpdatedAt = time.Now().UTC()
 	e := s.Store.Update(func(st *State) error {
 		st.Operations[id] = op
-		if op.Action == "cleanup" {
+		if op.Action == "cleanup" && len(own.Resources) == 0 {
 			delete(st.Owned, op.Key)
 		}
 		return nil

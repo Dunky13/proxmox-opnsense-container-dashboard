@@ -13,14 +13,16 @@ import (
 )
 
 type State struct {
-	Schema        int                   `json:"schema"`
-	Demo          bool                  `json:"demo"`
-	Config        Config                `json:"config"`
-	Owned         map[string]Ownership  `json:"owned"`
-	Plans         map[string]Plan       `json:"plans"`
-	Operations    map[string]Operation  `json:"operations"`
-	Jobs          map[string]Job        `json:"jobs"`
-	DemoResources map[string][]Resource `json:"demoResources,omitempty"`
+	// Private deletion evidence. External cleanup never enters the ownership ledger.
+	ExternalCleanups map[string]ExternalCleanupJournal `json:"externalCleanups,omitempty"`
+	Schema           int                               `json:"schema"`
+	Demo             bool                              `json:"demo"`
+	Config           Config                            `json:"config"`
+	Owned            map[string]Ownership              `json:"owned"`
+	Plans            map[string]Plan                   `json:"plans"`
+	Operations       map[string]Operation              `json:"operations"`
+	Jobs             map[string]Job                    `json:"jobs"`
+	DemoResources    map[string][]Resource             `json:"demoResources,omitempty"`
 }
 type Store struct {
 	mu       sync.Mutex
@@ -66,7 +68,7 @@ func OpenStore(dir string, demo bool) (*Store, error) {
 	fail := func(err error) (*Store, error) { s.Close(); return nil, err }
 	b, e := os.ReadFile(s.path)
 	if errors.Is(e, os.ErrNotExist) {
-		s.state = State{1, demo, Config{1, []Host{}, []OPNsense{}}, map[string]Ownership{}, map[string]Plan{}, map[string]Operation{}, map[string]Job{}, nil}
+		s.state = State{Schema: 1, Demo: demo, Config: Config{1, []Host{}, []OPNsense{}}, Owned: map[string]Ownership{}, Plans: map[string]Plan{}, Operations: map[string]Operation{}, Jobs: map[string]Job{}}
 		if e = s.persist(s.state); e != nil {
 			return fail(e)
 		}

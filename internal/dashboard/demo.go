@@ -173,8 +173,8 @@ func (*DemoProviders) Run(ctx context.Context, h Host, id int, kind string) (Run
 		return RunResult{}, ctx.Err()
 	case <-time.After(20 * time.Millisecond):
 	}
-	if kind == "inspect" {
-		return RunResult{Distribution: "debian", Version: "13"}, nil
+	if kind == "inspect" || kind == "capabilities" {
+		return RunResult{Distribution: "debian", Version: "13", AppUpdate: true}, nil
 	}
 	return RunResult{}, nil
 }

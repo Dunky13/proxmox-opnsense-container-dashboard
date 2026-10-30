@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -84,6 +85,20 @@ func NewAPI(s *Service, auth APIAuth, frontend http.Handler) http.Handler {
 	})
 	handle("POST /api/v1/hosts/{id}/test", func(w http.ResponseWriter, r *http.Request) error {
 		out, e := s.TestHost(r.Context(), r.PathValue("id"))
+		if e == nil {
+			writeJSON(w, 200, out)
+		}
+		return e
+	})
+	handle("POST /api/v1/hosts/{id}/containers/{vmid}/maintenance", func(w http.ResponseWriter, r *http.Request) error {
+		if e := readJSON(w, r, &struct{}{}); e != nil {
+			return e
+		}
+		vmid, e := strconv.Atoi(r.PathValue("vmid"))
+		if e != nil {
+			return bad("invalid VMID")
+		}
+		out, e := s.Maintenance(r.Context(), r.PathValue("id"), vmid)
 		if e == nil {
 			writeJSON(w, 200, out)
 		}

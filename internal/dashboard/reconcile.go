@@ -6,6 +6,10 @@ import (
 )
 
 type ReconcileItem struct {
+	ManagedResources  []ExistingResource `json:"managedResources,omitempty"`
+	Drift             []ResourceDrift    `json:"drift,omitempty"`
+	CanAcceptChanges  bool               `json:"canAcceptChanges,omitempty"`
+	AcceptBlocked     string             `json:"acceptBlocked,omitempty"`
 	ImportAvailable   bool               `json:"importAvailable,omitempty"`
 	ImportIssues      []string           `json:"importIssues,omitempty"`
 	ExistingRoute     *RouteConfig       `json:"existingRoute,omitempty"`
@@ -20,9 +24,10 @@ type ReconcileItem struct {
 	RouteUnavailable  bool               `json:"routeUnavailable,omitempty"`
 }
 type Reconciliation struct {
-	Inventory  Inventory       `json:"inventory"`
-	Items      []ReconcileItem `json:"items"`
-	Operations []Operation     `json:"operations"`
+	ProtectedCandidates []ProtectedCandidate `json:"protectedCandidates,omitempty"`
+	Inventory           Inventory            `json:"inventory"`
+	Items               []ReconcileItem      `json:"items"`
+	Operations          []Operation          `json:"operations"`
 }
 
 func (s *Service) Reconcile(ctx context.Context) Reconciliation {
@@ -51,14 +56,14 @@ func (s *Service) observeRouters(ctx context.Context, cfg Config) routerObservat
 				byRouter[o.ID] = snap
 			}
 		}
-		failures[h.ID] = routerFailures[o.ID]
+		failures[h.ID] = routerFailures[o.ID] || !byRouter[o.ID].Ready
 		snapshots[h.ID] = byRouter[o.ID]
 	}
 	return routerObservations{snapshots, failures}
 }
 
 func reconcile(st State, inv Inventory, routers routerObservations) Reconciliation {
-	out := Reconciliation{decorateInventory(inv, st), []ReconcileItem{}, operations(st)}
+	out := Reconciliation{Inventory: decorateInventory(inv, st), Items: []ReconcileItem{}, Operations: operations(st), ProtectedCandidates: protectedCandidates(st, inv, routers)}
 	snapshots, failures := routers.Snapshots, routers.Failures
 	seen := map[string]bool{}
 	for _, c := range inv.Containers {
@@ -104,6 +109,16 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 			}
 			o.UpstreamScheme = route.Scheme
 			o.UpstreamPort = route.Port
+		}
+		if owned && inv.Complete && !failures[h.ID] {
+			item.Drift = ownedDrift(own, snapshots[h.ID])
+			if len(item.Drift) > 0 {
+				_, _, err := reviewOwnedChanges(st, inv, h, o, own, snapshots[h.ID])
+				item.CanAcceptChanges = err == nil && !routerBlocked(st, o.ID)
+				if err != nil {
+					item.AcceptBlocked = err.Error()
+				}
+			}
 		}
 		if !inv.Complete || failures[h.ID] {
 			item.State = "unknown"
@@ -208,6 +223,17 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 			continue
 		}
 		item := ReconcileItem{Key: k, State: "unknown", Issues: []string{}, Owned: true}
+		if !failures[own.HostID] {
+			for _, ref := range own.Resources {
+				r, exists := snapshots[own.HostID].Find(ref.ID, ref.Kind)
+				if exists {
+					item.ManagedResources = append(item.ManagedResources, existingResource(r, "owned cleanup candidate"))
+				} else {
+					item.ManagedResources = append(item.ManagedResources, ExistingResource{ID: ref.ID, Kind: ref.Kind, Name: "Already absent; forget selected ownership only"})
+				}
+			}
+			item.Drift = ownedDrift(own, snapshots[own.HostID])
+		}
 		if validRoute(own.DesiredRoute) {
 			route := own.DesiredRoute
 			item.DesiredRoute = &route
@@ -223,6 +249,9 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 		} else if e = cleanupDeletionReferences(own, snapshots[own.HostID]); e != nil {
 			item.State = "conflict"
 			item.Issues = append(item.Issues, "unrelated configuration references owned resources")
+		} else if e = cleanupTargetConflicts(inv, own, snapshots[own.HostID]); e != nil {
+			item.State = "conflict"
+			item.Issues = append(item.Issues, e.Error())
 		} else {
 			item.State = "ownedOrphan"
 			item.Issues = append(item.Issues, "fully observed inventory has no matching VMID; cleanup requires explicit plan")

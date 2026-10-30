@@ -153,3 +153,91 @@ Apply `{}` re-reads complete inventory, creation identity/configuration, all pro
 Eligibility is deliberately narrow: one reservation matches both intended IP and MAC in the uniquely containing subnet, one enabled standalone app domain or native child domain matches the complete app FQDN, and one enabled ordinary reverse-proxy handle targets the exact intended IPv4 with representable HTTP/HTTPS and explicit port. Native relationships must be `child.reverse=parent`, `handle.reverse=parent`, `handle.subdomain=child`; standalone uses `handle.reverse=domain` with no child. A shared parent is external, never imported. Existing private exposure must use the selected suitable external policy, including the existing `client_ip` trust fingerprint contract. Nonempty or unobserved parent policy, additional auth/layered ACLs, multiple handles/domains, disabled routes, paths, unsupported TLS/transport configuration, wrong targets, shared app records and foreign dependencies provide precise blockers rather than an import offer.
 
 Import preserves all provider fields, including a stale reservation hostname. Reconciliation then shows genuine managed drift as mismatch. A subsequent normal reviewed ensure may align hostname and explicitly change this app's upstream or exposure. Native routes retain their child layout through ensure, repair, orphan classification, cleanup and recovery; the parent, siblings, selected ACL and trust/header context stay external. The durable private ledger retains complete app-resource repair templates; those templates are never returned in plans or operations. Missing resources are recreated from these templates in the same layout; nested advanced templates unsupported by the flat write API fail with an explicit repair blocker. See [import-existing.md](import-existing.md) for boundaries and source references.
+
+## Manual container maintenance
+
+See [container-maintenance.md](container-maintenance.md) for the task contract,
+restricted SSH bootstrap, exact workflow semantics and runtime acceptance limits.
+Cleanup is manual only. No schedule or unattended mutation endpoint exists.
+
+- `POST /api/v1/hosts/{id}/containers/{vmid}/maintenance`, body `{}`, returns
+  `{key,identity,fingerprint,observedAt,connected,distribution,version,source,
+  appUpdate,osUpdate,reason,appReason,osReason}`. This is a bounded read-only SSH
+  capability check against fresh inventory; errors and output are sanitized.
+  Only a successful actual SSH inspection sets `source:"ssh"`; isolated demo
+  observations use `source:"demo"`. Jobs never use
+  this display observation as authorization and recheck capability independently.
+- Reconcile items optionally include `drift:[{id,kind,status,changes:[{field,before,
+  after}],detail}]`, `canAcceptChanges`, `acceptBlocked` and, for absent owned apps,
+  `managedResources:[{id,kind,name,summary}]`. Arbitrary/auth/header fields and
+  private repair templates are excluded. `protectedCandidates:[{opnsenseId,
+  resource,observations,reason,eligible,hostId?,vmid?,fingerprint}]` lists unowned
+  records and precise eligibility/protection diagnostics. Discovery grants no
+  deletion or ownership authority. Eligible records require a separate explicit
+  acknowledged external cleanup plan.
+- Plan action `accept` reviews a compatible reservation hostname correction only.
+  Supply `public` matching current recorded exposure; route overrides are refused.
+  Effects use `action:"acknowledge"`. Apply revalidates all review bindings,
+  updates the ledger/template atomically, records Activity and sends zero provider
+  writes. All other significant/unknown drift remains blocked.
+- Plan action `reservation` adds only a missing reservation with no route input.
+  `public:true` or upstream overrides in the request are refused. For a new app,
+  `desiredRoute` is `{scheme:"",port:0,public:false}`, explicitly unavailable rather
+  than a configured upstream. Existing app route/exposure are preserved. The only
+  provider create is the reservation and the only service apply is KEA. Recovery
+  can repeat only verified service application, never an uncertain creation.
+- `cleanup` plans may supply nonempty `resourceIds:[UUID,...]` selecting an exact
+  subset of that app's recorded resources. Omit the field for the existing whole
+  app cleanup contract. Duplicate/foreign IDs are rejected. Retained dependencies
+  block deletion. Effects list exactly the selection, including already absent
+  UUIDs whose ownership will be forgotten. Unselected ownership is preserved.
+  `Operation.cleanupTargets` retains the original selected references for fresh
+  dependency checks during service recovery, even after their deletion.
+- Apply remains single use. A new app's live `ensure` requires explicit per-app
+  scheme/port; reservation-only ownership has no implicit route. Network changes,
+  cleanup/recovery and active/uncertain updates on the linked firewall cannot
+  overlap. Bulk inventory no longer performs SSH inspection.
+
+### Reviewed external cleanup
+
+`POST /api/v1/plans` accepts `action:"externalCleanup"`, `hostId`, `vmid`,
+`externalUseAcknowledged:true`, and nonempty
+`selectedResources:[{id,kind,fingerprint}]`. These are exact current UUIDs and
+fingerprints from eligible reconciliation candidates, never names or addresses
+as mutation selectors. Route/exposure overrides, duplicate UUIDs, owned resources
+and inconsistent app-domain/handle groups are rejected. No `resourceIds`
+shortcut is accepted for this action. Eligibility and reference/occupancy/subnet
+requirements are described in [container-maintenance.md](container-maintenance.md#remove-eligible-manually-created-records).
+
+The plan has `externalCleanup:{address:{hostId,vmid,ip,mac},targets,
+contextHash,foreignContextHash?,externalUseAcknowledged:true,recoveryId?}` and exact allowlisted
+`delete` effects. It has no app route: `desiredRoute` is
+`{scheme:"",port:0,public:false}`. Apply uses the existing single-use
+`POST /api/v1/plans/{id}/apply` with `{}`. The acknowledgement and exact targets
+are bound into the plan; the UI requires renewed acknowledgement on final review.
+Changed revision, configuration, ownership, complete inventory, snapshot,
+profile identity, references, fingerprints or expiry rejects the plan. The same
+complete guards run before each individual delete/service action. Caddy
+application must succeed before selected reservations are deleted. Reservation release also checks retained handles and binds complete snapshot
+fingerprints on every other configured firewall, including firewalls without
+enrolled hosts. A missing/changed foreign snapshot or retained upstream blocks
+release. Other firewalls remain read-only. Only affected services are applied. External cleanup calls no Create or Set method.
+
+`Operation.action` is `externalCleanup`; `externalCleanup`, `cleanupTargets` and
+`resources` expose original and remaining exact references. Full private getter
+evidence stays in the external cleanup journal, outside ownership and API output.
+The operation and consumed plan are durable before provider mutation; failure or
+uncertainty yields a partial/interrupted operation with its last recorded step.
+
+Generic `POST /operations/{id}/recover` refuses external cleanup. To deliberately
+inspect and recover, create another `externalCleanup` plan with `recoveryId` equal
+to the partial operation ID, all original exact `selectedResources` from
+`operation.externalCleanup.targets`, and a fresh external-use acknowledgement.
+The server accepts only unchanged remaining targets or absent selected rows,
+checks new UUID/IP references and all retained context, and binds the new current
+observations to another expiring single-use plan. Already absent targets get
+`retain` effects for deletion evidence, never ownership adoption or forgetting.
+Apply continues that operation journal and preserves all reviewed plan IDs.
+Reappeared deleted UUIDs, changed resources/retained context and unsafe occupancy
+remain blocked. Lost responses and restarts never trigger automatic mutation or
+generic owned recovery; failed recovery cannot mark success.

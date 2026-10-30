@@ -895,6 +895,26 @@ export function SettingsEditor({
                       />
                     )}
                   </Field>
+                  <details className="detail-section">
+                    <summary>Maintenance SSH setup</summary>
+                    <p>
+                      Install the reviewed deploy/container-proxy-ssh wrapper on
+                      this Proxmox host, owned by root. Create a dedicated key
+                      for this host on the dashboard server and restrict its
+                      authorized key with restrict, a source address and the
+                      forced command. Pin the host key using a trusted console.
+                      Allow only dashboard-to-host TCP 22, then save the SSH
+                      settings below.
+                    </p>
+                    <p>
+                      Never copy a personal root key or enable unrestricted root
+                      SSH. Provider API access alone does not grant maintenance
+                      access. After saving, open a running container and choose
+                      Check maintenance readiness. It verifies the connection,
+                      actual distro and executable /usr/bin/update. See the
+                      operator procedure in docs/container-maintenance.md.
+                    </p>
+                  </details>
                   <label className="check">
                     <input
                       type="checkbox"

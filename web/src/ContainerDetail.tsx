@@ -13,6 +13,8 @@ import {
   operationSchema,
   planSchema,
   schemeSchema,
+  maintenanceSchema,
+  type MaintenanceReadiness,
   type Job,
   type Plan,
   type Reconciliation,
@@ -47,6 +49,7 @@ export function PlanReview({
   const [clock, setClock] = useState(Date.now());
   const [publicReviewed, setPublicReviewed] = useState(false);
   const [ownershipReviewed, setOwnershipReviewed] = useState(false);
+  const [externalReviewed, setExternalReviewed] = useState(false);
   const [consumed, setConsumed] = useState(false);
   const attempted = useRef(false);
   const mounted = useRef(true);
@@ -64,6 +67,26 @@ export function PlanReview({
     !Number.isFinite(Date.parse(plan.expiresAt)) ||
     clock >= Date.parse(plan.expiresAt);
   const importing = plan.action === 'import';
+  const accepting = plan.action === 'accept';
+  const reservationOnly = plan.action === 'reservation';
+  const externalCleanup = plan.action === 'externalCleanup';
+  const deleting = plan.action === 'cleanup' || externalCleanup;
+  const exposureReview = plan.public && !deleting && !reservationOnly;
+  const invalidExternal =
+    externalCleanup &&
+    (!plan.externalCleanup ||
+      !plan.externalCleanup.targets.length ||
+      plan.effects.length !== plan.externalCleanup.targets.length ||
+      new Set(plan.effects.map((effect) => effect.resourceId)).size !==
+        plan.effects.length ||
+      plan.effects.some(
+        (effect) =>
+          !['delete', 'retain'].includes(effect.action) ||
+          !plan.externalCleanup?.targets.some(
+            (target) =>
+              target.id === effect.resourceId && target.kind === effect.kind,
+          ),
+      ));
   const invalidImport =
     importing &&
     (!plan.effects.some((effect) => effect.action === 'adopt') ||
@@ -76,14 +99,17 @@ export function PlanReview({
     consumed ||
     !!blockedReason ||
     invalidImport ||
+    invalidExternal ||
     plan.effects.length === 0 ||
-    (plan.public && plan.action !== 'cleanup' && !publicReviewed) ||
-    (importing && !ownershipReviewed);
+    (exposureReview && !publicReviewed) ||
+    (importing && !ownershipReviewed) ||
+    (externalCleanup && !externalReviewed);
   async function apply() {
     if (attempted.current || applyDisabled) return;
     attempted.current = true;
     setConsumed(true);
     setOwnershipReviewed(false);
+    setExternalReviewed(false);
     setPublicReviewed(false);
     setBusy(true);
     setError('');
@@ -95,14 +121,14 @@ export function PlanReview({
         { method: 'POST', body: '{}' },
       );
       if (
-        importing &&
+        (importing || externalCleanup) &&
         (operation.planId !== plan.id ||
           operation.key !== plan.key ||
-          operation.action !== 'import' ||
+          operation.action !== plan.action ||
           operation.opnsenseId !== plan.opnsenseId)
       )
         throw new ApiError(
-          'Returned operation does not match this import. Inspect Activity before another attempt.',
+          'Returned operation does not match this review. Inspect Activity before another attempt.',
           409,
           'operationMismatch',
         );
@@ -145,9 +171,15 @@ export function PlanReview({
         <h3 ref={heading} tabIndex={-1}>
           {importing
             ? 'Review existing configuration'
-            : plan.action === 'cleanup'
-              ? 'Review owned resource cleanup'
-              : 'Review network change'}
+            : externalCleanup
+              ? 'Review external resource cleanup'
+              : plan.action === 'cleanup'
+                ? 'Review owned resource cleanup'
+                : accepting
+                  ? 'Accept observed changes'
+                  : reservationOnly
+                    ? 'Review missing reservation'
+                    : 'Review network change'}
         </h3>
         <button
           className="icon-button"
@@ -160,9 +192,13 @@ export function PlanReview({
       </div>
       <p>
         <strong>{plan.key}</strong> ·{' '}
-        {plan.action === 'cleanup'
+        {deleting
           ? 'Deletes only the resources listed below.'
-          : `${plan.desiredRoute.scheme.toUpperCase()} upstream, port ${plan.desiredRoute.port}.`}
+          : reservationOnly
+            ? 'Adds only the selected missing reservation.'
+            : accepting
+              ? 'Acknowledges the reviewed hostname in dashboard ownership only.'
+              : `${plan.desiredRoute.scheme.toUpperCase()} upstream, port ${plan.desiredRoute.port}.`}
       </p>
       {importing && (
         <Notice>
@@ -174,7 +210,7 @@ export function PlanReview({
           externally owned.
         </Notice>
       )}
-      {plan.action !== 'cleanup' && (
+      {!deleting && !reservationOnly && (
         <Badge tone={plan.public ? 'warning' : 'good'}>
           {plan.public
             ? importing
@@ -189,6 +225,26 @@ export function PlanReview({
         Config revision {plan.revision}. Expires {formatTime(plan.expiresAt)}.
         The server checks fresh identity and provider state again on apply.
       </p>
+      {externalCleanup && plan.externalCleanup && (
+        <details>
+          <summary>Review identity bindings</summary>
+          <p>
+            {plan.externalCleanup.address.hostId} · VMID{' '}
+            {plan.externalCleanup.address.vmid} ·{' '}
+            <code>{plan.externalCleanup.address.ip}</code> ·{' '}
+            <code>{plan.externalCleanup.address.mac}</code>
+          </p>
+          <ul className="resource-list">
+            {plan.externalCleanup.targets.map((target) => (
+              <li key={target.id}>
+                {target.kind} · <code>{target.id}</code>
+                <br />
+                Fingerprint: <code>{target.fingerprint}</code>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {plan.effects.length === 0 ? (
         <Notice>
           No resource effects were returned. Create a new plan before applying.
@@ -252,7 +308,19 @@ export function PlanReview({
           including future reviewed changes and cleanup of these app resources.
         </label>
       )}
-      {plan.public && plan.action !== 'cleanup' && (
+      {externalCleanup && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={externalReviewed}
+            onChange={(event) => setExternalReviewed(event.target.checked)}
+            disabled={busy || consumed || !!blockedReason}
+          />
+          I confirm these exact UUIDs remain unused by external or unmanaged
+          clients and approve only the listed deletion and service effects.
+        </label>
+      )}
+      {exposureReview && (
         <label className="check">
           <input
             type="checkbox"
@@ -260,9 +328,11 @@ export function PlanReview({
             onChange={(event) => setPublicReviewed(event.target.checked)}
             disabled={busy || consumed}
           />
-          {importing
-            ? 'I acknowledge this import preserves existing public access. It does not add or remove an access restriction.'
-            : 'I reviewed the public exposure. This removes the private allowlist attachment for this domain.'}
+          {accepting
+            ? 'I acknowledge the reviewed configuration preserves existing public access.'
+            : importing
+              ? 'I acknowledge this import preserves existing public access. It does not add or remove an access restriction.'
+              : 'I reviewed the public exposure. This removes the private allowlist attachment for this domain.'}
         </label>
       )}
       {expired && (
@@ -283,15 +353,19 @@ export function PlanReview({
           inspect refreshed state before another review.
         </Notice>
       )}
+      {invalidExternal && (
+        <Notice>
+          External cleanup effects do not match the exact reviewed UUIDs and
+          kinds. Close this plan and inspect refreshed state.
+        </Notice>
+      )}
       {error && (
         <Notice tone="danger" role="alert">
           {error}
         </Notice>
       )}
       <button
-        className={
-          plan.action === 'cleanup' ? 'button danger-button' : 'button primary'
-        }
+        className={deleting ? 'button danger-button' : 'button primary'}
         disabled={applyDisabled}
         onClick={() => {
           void apply();
@@ -303,9 +377,15 @@ export function PlanReview({
             : 'Applying and refreshing…'
           : importing
             ? 'Import reviewed configuration'
-            : plan.action === 'cleanup'
-              ? 'Delete listed owned resources'
-              : 'Apply reviewed change'}
+            : externalCleanup
+              ? 'Delete listed external resources'
+              : plan.action === 'cleanup'
+                ? 'Delete listed owned resources'
+                : accepting
+                  ? 'Accept reviewed hostname'
+                  : reservationOnly
+                    ? 'Add reviewed reservation'
+                    : 'Apply reviewed change'}
       </button>
     </section>
   );
@@ -325,7 +405,9 @@ export function ContainerDetail({
   onJobReviewRequest,
   jobAttemptState,
   onJobAttemptState,
+  onSettings,
 }: {
+  onSettings?: () => void;
   view: ContainerView;
   data: Reconciliation;
   api: Api;
@@ -355,7 +437,7 @@ export function ContainerDetail({
     initialRoute?.scheme ?? (routeUnavailable ? '' : 'http'),
   );
   const [port, setPort] = useState(
-    initialRoute ? String(initialRoute.port) : routeUnavailable ? '' : '80',
+    initialRoute ? String(initialRoute.port) : '',
   );
   const [isPublic, setPublic] = useState(initialRoute?.public ?? false);
   const routeDraftEdited = useRef(false);
@@ -371,6 +453,7 @@ export function ContainerDetail({
   const previousPlan = useRef<Plan | null>(null);
   const importObservation = useRef<Reconciliation | null>(null);
   const preparing = useRef(false);
+  const planObservation = useRef<Reconciliation | null>(null);
   useEffect(() => {
     if (previousPlan.current && !plan)
       (previousPlan.current.action === 'import' && importButton.current
@@ -426,7 +509,9 @@ export function ContainerDetail({
     parsedPort >= 1 &&
     parsedPort <= 65535;
   const networkBusy = busy || !!plan;
-  async function review(action: 'ensure' | 'import' = 'ensure') {
+  async function review(
+    action: 'ensure' | 'import' | 'accept' | 'reservation' = 'ensure',
+  ) {
     if (preparing.current || plan || (action === 'import' && importBlock))
       return;
     preparing.current = true;
@@ -446,7 +531,9 @@ export function ContainerDetail({
                 upstreamScheme: scheme,
                 upstreamPort: parsedPort,
               }
-            : {}),
+            : action === 'accept'
+              ? { public: persisted?.public ?? false }
+              : {}),
         }),
       });
       if (
@@ -486,7 +573,10 @@ export function ContainerDetail({
           'staleImport',
         );
       importObservation.current = action === 'import' ? observation : null;
-      if (alive.current) setPlan(next);
+      if (alive.current) {
+        planObservation.current = observation;
+        setPlan(next);
+      }
     } catch (err) {
       if (alive.current) setError(messageOf(err instanceof Error ? err : null));
       await onRefresh();
@@ -500,7 +590,8 @@ export function ContainerDetail({
       jobAttemptConsumed.current ||
       jobAttemptState ||
       !activityLoaded ||
-      updateBlocked(view, jobs, kind)
+      updateBlocked(maintenanceView, jobs, kind) ||
+      capabilityReason(kind)
     )
       return;
     jobAttemptConsumed.current = true;
@@ -540,6 +631,62 @@ export function ContainerDetail({
       await onRefresh();
     } finally {
       if (alive.current) setJobBusy(false);
+    }
+  }
+  const [readiness, setReadiness] = useState<MaintenanceReadiness | null>(null);
+  const [checkingMaintenance, setCheckingMaintenance] = useState(false);
+  const currentReadiness =
+    readiness?.identity === c.identity &&
+    readiness.fingerprint === c.fingerprint &&
+    Date.now() - Date.parse(readiness.observedAt) < 60000
+      ? readiness
+      : null;
+  const maintenanceView: ContainerView = currentReadiness?.connected
+    ? {
+        ...view,
+        container: {
+          ...c,
+          distribution: currentReadiness.distribution,
+          version: currentReadiness.version,
+          distroSource: 'ssh',
+        },
+      }
+    : view;
+  function capabilityReason(kind: Job['kind']) {
+    if (!currentReadiness) return '';
+    return (
+      currentReadiness.reason ||
+      (kind === 'appUpdate'
+        ? currentReadiness.appReason
+        : currentReadiness.osReason)
+    );
+  }
+  async function checkMaintenance() {
+    if (checkingMaintenance) return;
+    setCheckingMaintenance(true);
+    setReadiness(null);
+    setError('');
+    try {
+      const result = await api.request(
+        `/hosts/${encodeURIComponent(c.hostId)}/containers/${c.vmid}/maintenance`,
+        maintenanceSchema,
+        { method: 'POST', body: '{}' },
+      );
+      if (
+        result.key !== c.key ||
+        result.identity !== c.identity ||
+        result.fingerprint !== c.fingerprint
+      )
+        throw new ApiError(
+          'Container changed during maintenance check. Refresh inventory.',
+          409,
+          'staleMaintenance',
+        );
+      if (alive.current) setReadiness(result);
+    } catch (err) {
+      if (alive.current) setError(messageOf(err instanceof Error ? err : null));
+    } finally {
+      if (alive.current) setCheckingMaintenance(false);
     }
   }
   const containerJobs = jobs.filter((job) => job.key === c.key);
@@ -819,7 +966,11 @@ export function ContainerDetail({
                 (importObservation.current !== data
                   ? 'Observations changed after review. Close this plan, inspect refreshed state and request a new plan.'
                   : '')
-              : ''
+              : view.stale ||
+                  !data.inventory.complete ||
+                  planObservation.current !== data
+                ? 'Observations changed after review. Close this plan and review refreshed state.'
+                : block
           }
           onDone={async () => {
             if (plan.action === 'import') {
@@ -833,8 +984,104 @@ export function ContainerDetail({
           onClose={() => setPlan(null)}
         />
       )}
+      <section className="detail-section" aria-label="Repair missing records">
+        <h3>Repair missing records</h3>
+        <p className="muted">
+          Review the exact resource effects before applying. Reservation-only
+          repair requires no app port. Proxy configuration requires this app's
+          scheme and port above.
+        </p>
+        <div className="actions">
+          <button
+            className="button"
+            disabled={networkBusy || !!block}
+            onClick={() => {
+              void review('reservation');
+            }}
+          >
+            Add missing reservation
+          </button>
+          <button
+            className="button"
+            disabled={networkBusy || !!block || !validScheme || !validPort}
+            onClick={() => {
+              void review('ensure');
+            }}
+          >
+            Add missing proxy / repair configuration
+          </button>
+          {view.item?.canAcceptChanges && (
+            <button
+              className="button"
+              disabled={networkBusy || !!block}
+              onClick={() => {
+                void review('accept');
+              }}
+            >
+              Review observed hostname change
+            </button>
+          )}
+        </div>
+        {view.item?.drift?.length && view.item.acceptBlocked ? (
+          <p className="disabled-reason">
+            Acknowledgement blocked: {view.item.acceptBlocked}
+          </p>
+        ) : null}
+      </section>
       <section className="detail-section">
         <h3>Maintenance</h3>
+        <div className="actions">
+          <button
+            className="button"
+            disabled={
+              checkingMaintenance ||
+              view.stale ||
+              c.status !== 'running' ||
+              !c.identity
+            }
+            onClick={() => {
+              void checkMaintenance();
+            }}
+          >
+            {checkingMaintenance
+              ? 'Checking SSH and commands…'
+              : 'Check maintenance readiness'}
+          </button>
+          {onSettings && (
+            <button className="button" onClick={onSettings}>
+              Open maintenance settings
+            </button>
+          )}
+        </div>
+        <p className="muted">
+          Use a dedicated key restricted by the supplied forced-command wrapper.
+          Verify the host key, TCP 22 access from the dashboard and server-side
+          key paths before enabling SSH. Network drift does not determine update
+          availability.
+        </p>
+        {currentReadiness && (
+          <div role="status">
+            {currentReadiness.connected ? (
+              <p>
+                {currentReadiness.source === 'demo'
+                  ? 'Simulated maintenance'
+                  : 'SSH connected'}{' '}
+                · {currentReadiness.distribution}{' '}
+                {currentReadiness.version || 'version unavailable'} · source:{' '}
+                {currentReadiness.source === 'ssh'
+                  ? 'SSH'
+                  : currentReadiness.source}{' '}
+                · checked {formatTime(currentReadiness.observedAt)}. App update:{' '}
+                {currentReadiness.appUpdate ? 'available' : 'unavailable'}. OS
+                update:{' '}
+                {currentReadiness.osUpdate ? 'supported' : 'unsupported'}.
+              </p>
+            ) : (
+              <Notice>{currentReadiness.reason}</Notice>
+            )}
+          </div>
+        )}
+
         <p className="muted">
           No version check is available. Each action requests a real server job.
           App updates run the container’s existing /usr/bin/update; OS updates
@@ -846,7 +1093,8 @@ export function ContainerDetail({
               ? 'Inspect the previous update request before another review.'
               : !activityLoaded
                 ? 'Refresh Activity before starting an update; current job state is unavailable.'
-                : updateBlocked(view, jobs, kind);
+                : updateBlocked(maintenanceView, jobs, kind) ||
+                  capabilityReason(kind);
             return (
               <div key={kind}>
                 <button
@@ -907,7 +1155,8 @@ export function ContainerDetail({
                 disabled={
                   jobBusy ||
                   !activityLoaded ||
-                  !!updateBlocked(view, jobs, jobToConfirm)
+                  !!updateBlocked(maintenanceView, jobs, jobToConfirm) ||
+                  !!capabilityReason(jobToConfirm)
                 }
                 onClick={() => {
                   void startJob(jobToConfirm);

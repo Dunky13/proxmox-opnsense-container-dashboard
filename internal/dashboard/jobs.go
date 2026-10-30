@@ -18,6 +18,10 @@ func jobBlocks(j Job) bool {
 	return j.Status == "queued" || j.Status == "running" || ((j.Status == "timedOut" || j.Status == "interrupted" || j.Status == "rebootRequired") && !j.Acknowledged)
 }
 func (s *Service) StartJob(ctx context.Context, req JobRequest) (Job, error) {
+	if !s.mutate.TryLock() {
+		return Job{}, conflict("another mutation is active")
+	}
+	defer s.mutate.Unlock()
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
 	s.Store.invalidateObservations()
@@ -35,6 +39,9 @@ func (s *Service) StartJob(ctx context.Context, req JobRequest) (Job, error) {
 	}
 	if !h.SSH.Enabled && !st.Demo {
 		return Job{}, conflict("SSH must be enabled")
+	}
+	if routerBlocked(st, h.OPNsenseID) {
+		return Job{}, conflict("linked firewall has an unfinished operation or update job")
 	}
 	count := 0
 	for _, j := range st.Jobs {
@@ -58,6 +65,9 @@ func (s *Service) StartJob(ctx context.Context, req JobRequest) (Job, error) {
 	}
 	if req.Fingerprint == "" || req.Fingerprint != c.Fingerprint {
 		return Job{}, conflict("container changed; refresh inventory")
+	}
+	if e = s.freshJobCapability(ctx, h, req.VMID, req.Kind); e != nil {
+		return Job{}, e
 	}
 	now := time.Now().UTC()
 	j := Job{ID: newID(), Key: c.Key, HostID: h.ID, VMID: c.VMID, Kind: req.Kind, Fingerprint: c.Fingerprint, Status: "queued", CreatedAt: now, UpdatedAt: now, Logs: []string{"Update requested explicitly; queued."}}
@@ -122,13 +132,10 @@ func (s *Service) runJob(j Job, h Host, identity string) {
 	}
 	executed := false
 	result := RunResult{}
-	if e == nil && j.Kind == "osUpdate" {
-		var os RunResult
-		os, e = s.Providers.Run(ctx, h, j.VMID, "inspect")
-		if e == nil && os.Distribution != "debian" && os.Distribution != "ubuntu" && os.Distribution != "alpine" {
-			e = bad("OS updates support Debian, Ubuntu and Alpine only")
-		}
+	if e == nil {
+		e = s.freshJobCapability(ctx, h, j.VMID, j.Kind)
 	}
+
 	if e == nil {
 		latest := s.Providers.Inventory(ctx, s.Store.Read().Config)
 		fresh, e2 := ensureContainer(latest, h, j.VMID)

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight } from '@phosphor-icons/react';
-import { Api, messageOf } from './api';
+import { Api, ApiError, messageOf } from './api';
 import {
   planSchema,
   type Plan,
@@ -9,6 +9,8 @@ import {
   type Settings,
 } from './schemas';
 import { PlanReview } from './ContainerDetail';
+import { ResourceDrift } from './ResourceDrift';
+import { ExternalCleanup } from './ExternalCleanup';
 import { Badge, Empty, Notice, Status } from './ui';
 
 export function Mismatches({
@@ -29,7 +31,9 @@ export function Mismatches({
   const [plan, setPlan] = useState<Plan | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [selected, setSelected] = useState<Record<string, string[]>>({});
   const alive = useRef(true);
+  const planObservation = useRef<Reconciliation | null>(null);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -57,9 +61,33 @@ export function Mismatches({
           hostId,
           vmid,
           public: false,
+          ...(item.managedResources?.length
+            ? { resourceIds: selected[item.key] ?? [] }
+            : {}),
         }),
       });
-      if (alive.current) setPlan(next);
+      if (next.action !== 'cleanup' || next.key !== item.key)
+        throw new ApiError(
+          'Cleanup response does not match the requested app.',
+          409,
+          'cleanupMismatch',
+        );
+      const requested = selected[item.key];
+      if (
+        requested?.length &&
+        (new Set(next.effects.map((effect) => effect.resourceId)).size !==
+          requested.length ||
+          next.effects.some((effect) => !requested.includes(effect.resourceId)))
+      )
+        throw new ApiError(
+          'Cleanup effects do not match the selected resources.',
+          409,
+          'cleanupSelectionMismatch',
+        );
+      if (alive.current) {
+        planObservation.current = data;
+        setPlan(next);
+      }
     } catch (err) {
       if (alive.current) setError(messageOf(err instanceof Error ? err : null));
       await onRefresh();
@@ -73,11 +101,13 @@ export function Mismatches({
         <div>
           <h1>Mismatches</h1>
           <p>
-            Compare fresh inventory with dashboard-owned KEA and Caddy
-            resources.
+            Select stale reservations or proxies, review exact UUIDs, then run
+            cleanup manually. Add missing records from each app's configuration.
           </p>
         </div>
-        <Badge>{items.length} need review</Badge>
+        <Badge>
+          {items.length + (data.protectedCandidates?.length ?? 0)} need review
+        </Badge>
       </div>
       {!data.inventory.complete && (
         <Notice>
@@ -85,7 +115,7 @@ export function Mismatches({
           orphans or cleaned up.
         </Notice>
       )}
-      {items.length === 0 && (
+      {items.length === 0 && !data.protectedCandidates?.length && (
         <Empty title="No configuration mismatches">
           <p>
             The latest observed inventory matches dashboard-owned resources.
@@ -128,20 +158,66 @@ export function Mismatches({
                   <li key={i}>{issue}</li>
                 ))}
               </ul>
+              <ResourceDrift item={item} />
+              {canCleanup && !!item.managedResources?.length && (
+                <fieldset disabled={!!busy || !!plan}>
+                  <legend>Select stale resources to remove</legend>
+                  {item.managedResources.map((resource) => (
+                    <label className="check" key={resource.id}>
+                      <input
+                        type="checkbox"
+                        checked={
+                          selected[item.key]?.includes(resource.id) ?? false
+                        }
+                        onChange={(event) =>
+                          setSelected((previous) => ({
+                            ...previous,
+                            [item.key]: event.target.checked
+                              ? [...(previous[item.key] ?? []), resource.id]
+                              : (previous[item.key] ?? []).filter(
+                                  (id) => id !== resource.id,
+                                ),
+                          }))
+                        }
+                      />
+                      <span>
+                        {resource.kind === 'reservation'
+                          ? 'Remove stale reservation'
+                          : 'Remove stale proxy resource'}{' '}
+                        · {resource.kind} · <code>{resource.id}</code>
+                        <br />
+                        {resource.name}
+                      </span>
+                    </label>
+                  ))}
+                  <p className="muted">
+                    Select linked proxy resources with their reservation and
+                    domain. Retained or foreign references block deletion.
+                    Already absent selected UUIDs only lose their ownership
+                    record.
+                  </p>
+                </fieldset>
+              )}
               <div className="actions">
                 {container && (
                   <button
                     className="button"
                     onClick={() => onInspect(item.key)}
                   >
-                    Inspect and review configuration
+                    Add missing / review configuration
                     <ArrowRight size={16} />
                   </button>
                 )}
                 {!container && (
                   <button
                     className="button danger-text"
-                    disabled={!canCleanup || !!busy || !!plan}
+                    disabled={
+                      !canCleanup ||
+                      !!busy ||
+                      !!plan ||
+                      (!!item.managedResources?.length &&
+                        !selected[item.key]?.length)
+                    }
                     onClick={() => {
                       void cleanup(item);
                     }}
@@ -161,13 +237,15 @@ export function Mismatches({
                 <p className="disabled-reason">
                   Cleanup requires a confirmed owned orphan, complete fresh
                   inventory and no incomplete operation. Unknown, conflicting
-                  and unowned records are protected.
+                  and ambiguous records are protected. Eligible unowned records
+                  have a separate acknowledged review below.
                 </p>
               )}
             </article>
           );
         })}
       </div>
+      <ExternalCleanup api={api} data={data} onRefresh={onRefresh} />
       {error && (
         <Notice tone="danger" role="alert">
           {error}
@@ -178,6 +256,11 @@ export function Mismatches({
           key={plan.id}
           api={api}
           plan={plan}
+          blockedReason={
+            planObservation.current !== data || !data.inventory.complete
+              ? 'Observations changed after review. Close this plan and review the current selection.'
+              : ''
+          }
           onClose={() => setPlan(null)}
           onDone={onRefresh}
         />

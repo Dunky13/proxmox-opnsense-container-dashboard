@@ -331,8 +331,8 @@ func TestJobsSerializedStoppedTimeoutAndAcknowledgement(t *testing.T) {
 	ct, _ := inv.Find("main:604")
 	release := make(chan struct{})
 	p.run = func(ctx context.Context, h Host, id int, k string) (RunResult, error) {
-		if k == "inspect" {
-			return RunResult{Distribution: "debian", Version: "13"}, nil
+		if k == "inspect" || k == "capabilities" {
+			return RunResult{Distribution: "debian", Version: "13", AppUpdate: true}, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -365,6 +365,9 @@ func TestJobsSerializedStoppedTimeoutAndAcknowledgement(t *testing.T) {
 	}
 	s.JobTimeout = 20 * time.Millisecond
 	p.run = func(ctx context.Context, h Host, id int, k string) (RunResult, error) {
+		if k == "capabilities" {
+			return RunResult{AppUpdate: true, Distribution: "debian"}, nil
+		}
 		<-ctx.Done()
 		return RunResult{}, ctx.Err()
 	}
@@ -499,20 +502,16 @@ func TestUnsupportedOSDoesNotRunUpdate(t *testing.T) {
 	s, p, _ := demoService(t)
 	executed := false
 	p.run = func(ctx context.Context, h Host, id int, k string) (RunResult, error) {
-		if k == "inspect" {
+		if k == "inspect" || k == "capabilities" {
 			return RunResult{Distribution: "fedora", Version: "44"}, nil
 		}
 		executed = true
 		return RunResult{}, nil
 	}
 	ct, _ := s.Inventory(context.Background()).Find("main:604")
-	j, e := s.StartJob(context.Background(), JobRequest{"main", 604, "osUpdate", ct.Fingerprint})
-	if e != nil {
-		t.Fatal(e)
-	}
-	j = waitJob(t, s, j.ID)
-	if executed || j.Status != "failed" {
-		t.Fatal(j)
+	_, e := s.StartJob(context.Background(), JobRequest{"main", 604, "osUpdate", ct.Fingerprint})
+	if e == nil || executed {
+		t.Fatal("unsupported OS accepted or update executed", e)
 	}
 }
 

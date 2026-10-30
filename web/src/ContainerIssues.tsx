@@ -1,5 +1,6 @@
 import type { ContainerView } from './viewmodel';
 import { Field } from './ui';
+import { ResourceDrift } from './ResourceDrift';
 
 export function ContainerIssues({
   view,
@@ -40,6 +41,7 @@ export function ContainerIssues({
     return null;
   return (
     <div className="container-issues">
+      {expandedResources && view.item && <ResourceDrift item={view.item} />}
       {resources.length > 0 && (
         <details
           className="existing-configuration"

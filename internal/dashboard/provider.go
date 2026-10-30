@@ -28,6 +28,7 @@ type Providers interface {
 	Run(context.Context, Host, int, string) (RunResult, error)
 }
 type RunResult struct {
+	AppUpdate      bool
 	Distribution   string
 	Version        string
 	RebootRequired bool

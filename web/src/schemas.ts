@@ -159,7 +159,45 @@ export const subnetDiscoverySchema = z.object({
     z.object({ id: z.uuid(), cidr: z.cidrv4(), description: text }),
   ),
 });
+export const fieldChangeSchema = z.object({
+  field: text,
+  before: text,
+  after: text,
+});
+const existingResourceSchema = z.object({
+  kind: text,
+  id: text,
+  name: text,
+  summary: text,
+});
+export const driftSchema = z.object({
+  id: text,
+  kind: text,
+  status: z.enum(['missing', 'changed']),
+  changes: z.array(fieldChangeSchema),
+  detail: text,
+});
+export const maintenanceSchema = z.object({
+  key: text,
+  identity: text,
+  fingerprint: text,
+  observedAt: text,
+  connected: z.boolean(),
+  distribution: text,
+  version: text,
+  source: z.enum(['', 'ssh', 'demo']),
+  appUpdate: z.boolean(),
+  osUpdate: z.boolean(),
+  reason: text,
+  appReason: text,
+  osReason: text,
+});
+export type MaintenanceReadiness = z.infer<typeof maintenanceSchema>;
 export const itemSchema = z.object({
+  drift: z.array(driftSchema).optional(),
+  managedResources: z.array(existingResourceSchema).optional(),
+  canAcceptChanges: z.boolean().optional(),
+  acceptBlocked: text.optional(),
   importAvailable: z.boolean().optional(),
   importIssues: list(text).optional(),
   existingRoute: routeSchema.optional(),
@@ -193,7 +231,17 @@ const ownedResourceSchema = z.object({
   kind: text,
   fingerprint: text,
 });
+const externalCleanupReviewSchema = z.object({
+  foreignContextHash: text.optional(),
+  address: z.object({ hostId: text, vmid: integer, ip: text, mac: text }),
+  targets: list(ownedResourceSchema),
+  contextHash: text,
+  recoveryId: text.optional(),
+  externalUseAcknowledged: z.literal(true),
+});
 export const operationSchema = z.object({
+  externalCleanup: externalCleanupReviewSchema.optional(),
+  cleanupTargets: list(ownedResourceSchema).optional(),
   resolvedSubnet: subnetReferenceSchema.optional(),
   sharedAccessList: accessListReferenceSchema.optional(),
   desiredRoute: routeSchema.optional(),
@@ -212,38 +260,86 @@ export const operationSchema = z.object({
 });
 export const operationsSchema = list(operationSchema);
 export const reconciliationSchema = z.object({
+  protectedCandidates: z
+    .array(
+      z.object({
+        opnsenseId: text,
+        resource: existingResourceSchema,
+        observations: z.array(fieldChangeSchema),
+        reason: text,
+        eligible: z.boolean().optional(),
+        hostId: text.optional(),
+        vmid: integer.optional(),
+        fingerprint: text.optional(),
+      }),
+    )
+    .optional(),
   inventory: inventorySchema,
   items: list(itemSchema),
   operations: operationsSchema,
 });
-export const planSchema = z.object({
-  resolvedSubnet: subnetReferenceSchema.optional(),
-  sharedAccessList: accessListReferenceSchema.optional(),
-  id: text,
-  action: z.enum(['ensure', 'cleanup', 'import']),
-  key: text,
-  hostId: text,
-  vmid: integer,
-  opnsenseId: text,
-  public: z.boolean(),
-  desiredRoute: routeSchema,
-  revision: integer,
-  inventoryHash: text,
-  providerHash: text,
-  identity: text,
-  createdAt: text,
-  expiresAt: text,
-  effects: list(
-    z.object({
-      kind: text,
-      action: z.enum(['create', 'update', 'retain', 'delete', 'adopt']),
-      resourceId: text,
-      name: text,
-      changes: list(z.object({ field: text, before: text, after: text })),
-    }),
-  ),
-  applyNotes: list(text),
-});
+export const planSchema = z
+  .object({
+    resolvedSubnet: subnetReferenceSchema.optional(),
+    sharedAccessList: accessListReferenceSchema.optional(),
+    id: text,
+    action: z.enum([
+      'ensure',
+      'reservation',
+      'cleanup',
+      'externalCleanup',
+      'import',
+      'accept',
+    ]),
+    externalCleanup: externalCleanupReviewSchema.optional(),
+    key: text,
+    hostId: text,
+    vmid: integer,
+    opnsenseId: text,
+    public: z.boolean(),
+    desiredRoute: z.union([
+      routeSchema,
+      z.object({
+        scheme: z.literal(''),
+        port: z.literal(0),
+        public: z.literal(false),
+      }),
+    ]),
+    revision: integer,
+    inventoryHash: text,
+    providerHash: text,
+    identity: text,
+    createdAt: text,
+    expiresAt: text,
+    effects: list(
+      z.object({
+        kind: text,
+        action: z.enum([
+          'create',
+          'update',
+          'retain',
+          'delete',
+          'adopt',
+          'acknowledge',
+        ]),
+        resourceId: text,
+        name: text,
+        changes: list(z.object({ field: text, before: text, after: text })),
+      }),
+    ),
+    applyNotes: list(text),
+  })
+  .refine(
+    (value) =>
+      value.action === 'reservation' ||
+      value.action === 'externalCleanup' ||
+      routeSchema.safeParse(value.desiredRoute).success,
+    {
+      message:
+        'Only reservation-only or external cleanup plans may have an unavailable app route.',
+      path: ['desiredRoute'],
+    },
+  );
 export const jobSchema = z.object({
   id: text,
   key: text,
