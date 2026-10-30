@@ -44,6 +44,9 @@ var headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 // Relation dictionaries expose a set, not the configured selection order. Never
 // turn sorted UUIDs into a claim about Caddy's effective header precedence.
 func policySelection(value any) (string, string, error) {
+	if empty, ok := value.([]any); ok && len(empty) == 0 {
+		return "", "configured", nil
+	}
 	if options, ok := value.(map[string]any); ok {
 		for _, option := range options {
 			entry, ok := option.(map[string]any)

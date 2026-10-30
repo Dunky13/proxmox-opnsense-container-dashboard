@@ -359,6 +359,13 @@ func cleanupReferences(own Ownership, snap ProviderSnapshot) error {
 	ids := map[string]bool{}
 	for _, r := range own.Resources {
 		ids[r.ID] = true
+		if _, exists := snap.Find(r.ID, "acl"); r.Kind == "acl" && exists {
+			general, present := snap.Find("general", "caddyGeneral")
+			trustedID, observed := general.Fields["accesslist"]
+			if !present || !observed || (trustedID != "" && !uuidPattern.MatchString(trustedID)) {
+				return conflict("global trusted proxy selection must be verified before deleting an owned access list")
+			}
+		}
 	}
 	for _, r := range snap.Resources {
 		if ids[r.ID] {

@@ -25,7 +25,7 @@ const trustDemoACL = "aaaaaaaa-4444-4444-8444-444444444444"
 const clientDemoHeader = "aaaaaaaa-5555-4555-8555-555555555555"
 
 func TestLayer4EnabledWithoutRulesUsesHTTPPolicyContext(t *testing.T) {
-	for _, mode := range []string{"empty", "configured", "failed", "missing-rows", "incomplete", "proxy-protocol"} {
+	for _, mode := range []string{"empty", "empty-arrays", "malformed-header-array", "configured", "failed", "missing-rows", "incomplete", "proxy-protocol"} {
 		t.Run(mode, func(t *testing.T) {
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet {
@@ -41,7 +41,15 @@ func TestLayer4EnabledWithoutRulesUsesHTTPPolicyContext(t *testing.T) {
 					if mode == "proxy-protocol" {
 						allow = "192.0.2.0/24"
 					}
-					writeJSON(w, 200, map[string]any{"caddy": map[string]any{"general": map[string]string{"enabled": "1", "accesslist": "", "ClientIpHeaders": "", "EnableLayer4": "1", "ProxyProtocolAllow": allow}}})
+					general := map[string]any{"enabled": "1", "accesslist": "", "ClientIpHeaders": "", "EnableLayer4": "1", "ProxyProtocolAllow": allow}
+					if mode == "empty-arrays" {
+						general["accesslist"] = []any{}
+						general["ClientIpHeaders"] = []any{}
+					}
+					if mode == "malformed-header-array" {
+						general["ClientIpHeaders"] = []any{clientDemoHeader}
+					}
+					writeJSON(w, 200, map[string]any{"caddy": map[string]any{"general": general}})
 				case "/api/caddy/reverse_proxy/search_layer4":
 					if r.URL.Query().Get("rowCount") != "-1" || r.URL.Query().Get("current") != "1" {
 						t.Fatal("partial Layer 4 request")
@@ -68,7 +76,7 @@ func TestLayer4EnabledWithoutRulesUsesHTTPPolicyContext(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if policy.ClientIPContext.Suitable != (mode == "empty") {
+			if policy.ClientIPContext.Suitable != (mode == "empty" || mode == "empty-arrays") {
 				t.Fatal(mode, policy.ClientIPContext)
 			}
 			if mode == "empty" && !policy.ClientIPContext.Layer4EmptyVerified {
