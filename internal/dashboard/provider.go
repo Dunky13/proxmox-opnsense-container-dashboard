@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,6 +34,54 @@ type RunResult struct {
 }
 type RealProviders struct{ SSH SSHRunner }
 
+type providerHTTPKey struct{ base, ca string }
+type providerHTTPContextKey struct{}
+
+// A scope belongs to one API request or standalone provider operation. Clients
+// contain only transport policy; authentication is applied to each request.
+// Separate addresses and trust revisions never share a transport.
+type providerHTTPScope struct {
+	mu      sync.Mutex
+	clients map[providerHTTPKey]*http.Client
+	closed  bool
+}
+
+func withProviderHTTP(ctx context.Context) (context.Context, func()) {
+	if _, ok := ctx.Value(providerHTTPContextKey{}).(*providerHTTPScope); ok {
+		return ctx, func() {}
+	}
+	scope := &providerHTTPScope{clients: make(map[providerHTTPKey]*http.Client)}
+	return context.WithValue(ctx, providerHTTPContextKey{}, scope), scope.close
+}
+
+func (s *providerHTTPScope) client(base, ca string) (*http.Client, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, unavailable("provider request scope is closed")
+	}
+	key := providerHTTPKey{strings.TrimRight(base, "/"), ca}
+	if client := s.clients[key]; client != nil {
+		return client, nil
+	}
+	client, err := newHTTP(ca)
+	if err != nil {
+		return nil, err
+	}
+	s.clients[key] = client
+	return client, nil
+}
+
+func (s *providerHTTPScope) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, client := range s.clients {
+		client.CloseIdleConnections()
+	}
+	s.clients = nil
+	s.closed = true
+}
+
 func newHTTP(ca string) (*http.Client, error) {
 	pool, e := x509.SystemCertPool()
 	if e != nil {
@@ -43,16 +92,19 @@ func newHTTP(ca string) (*http.Client, error) {
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-	tr.MaxConnsPerHost = 4
+	tr.MaxConnsPerHost = 2
+	tr.MaxIdleConnsPerHost = 2
+	tr.MaxIdleConns = 2
 	tr.ResponseHeaderTimeout = 15 * time.Second
 	return &http.Client{Timeout: 20 * time.Second, Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }
 func providerJSON(ctx context.Context, base, ca, method, path string, body any, auth func(*http.Request), out any) error {
-	client, e := newHTTP(ca)
+	ctx, closeHTTP := withProviderHTTP(ctx)
+	defer closeHTTP()
+	client, e := ctx.Value(providerHTTPContextKey{}).(*providerHTTPScope).client(base, ca)
 	if e != nil {
 		return e
 	}
-	defer client.CloseIdleConnections()
 	var b io.Reader
 	if body != nil {
 		raw, e := json.Marshal(body)

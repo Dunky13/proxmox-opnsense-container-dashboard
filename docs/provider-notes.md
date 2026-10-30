@@ -62,6 +62,14 @@ Auth uses [coreos/go-oidc](https://github.com/coreos/go-oidc) v3.21.0, [golang.o
 
 Durable config, secrets, ownership, plans, operations, jobs, and demo resources share one atomic JSON state file. Directories use 0700; state/lock files use 0600. A process lock rejects a second server on the same directory. Writes use a same-directory temp file, file fsync, rename and directory fsync; persistence uncertainty blocks later mutations until restart/inspection. Secrets are plaintext at rest within that protected file: protect backups and the host. There is no external database. Demo and live state are mode-bound; reusing one mode's state in the other refuses startup. Demo CLI startup ignores live auth environment and secret files. A live failure never falls back to demo. Authentication session state is intentionally ephemeral and separate.
 
+## Provider read lifecycle
+
+Provider HTTP clients live for one authenticated API request, or for one standalone provider operation outside the API. Nested inventories, policy checks, snapshots and write readbacks reuse connections within that scope. Separate provider addresses and CA PEM revisions use separate transports; credentials are attached to each request rather than stored on clients. Scope exit closes idle connections. Redirect refusal, TLS hostname/CA verification, response limits and the existing API/provider deadlines remain in force.
+
+Complete OPNsense inventories still fetch every getter. Proxmox still reads cluster occupancy, every local container configuration and running-container interfaces. Independent resource getters and container reads use at most two workers per operation; hosts, resource kinds, SSH inspections and mutations retain their serial order. Results retain their original ordering before existing canonical sorts. Read failures cancel sibling/queued reads and join the workers before return. The existing optional runtime-network warning behavior is preserved. Snapshots and inventory results are never cached, and all existing freshness checks before writes and service application remain required.
+
+`provider_reads_test.go` exercises 250 HTTP reads yielding 241 normalized resources and 48 reads yielding 33 containers, counting connections rather than imposing elapsed-time thresholds. Barrier tests verify bounded concurrency and cancellation on failed, malformed and incomplete reads. `provider_http_test.go` verifies CA/hostname/credential isolation, redirect/write-retry refusal and repeated fresh reads through the API request lifecycle. These local fixtures do not establish real-provider workflow latency or deployment acceptance.
+
 ## Local validation and parent handoff
 
 Run from the repository root with Go 1.26:

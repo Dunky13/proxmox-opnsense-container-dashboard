@@ -243,6 +243,8 @@ func resolveClientIPContext(general Resource, fields map[string]any, rows []Reso
 	return c
 }
 func (p *RealProviders) CaddyPolicy(ctx context.Context, o OPNsense) (CaddyPolicySnapshot, error) {
+	ctx, closeHTTP := withProviderHTTP(ctx)
+	defer closeHTTP()
 	rows, err := p.AccessLists(ctx, o)
 	if err != nil {
 		return CaddyPolicySnapshot{}, err

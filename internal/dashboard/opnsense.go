@@ -147,6 +147,8 @@ func (p *RealProviders) getResource(ctx context.Context, o OPNsense, kind, id st
 	return r, nil
 }
 func (p *RealProviders) listResources(ctx context.Context, o OPNsense, kind string) ([]Resource, error) {
+	ctx, closeHTTP := withProviderHTTP(ctx)
+	defer closeHTTP()
 	ep, _ := resourceEndpoint(kind)
 	var grid struct {
 		Total *int `json:"total"`
@@ -162,22 +164,20 @@ func (p *RealProviders) listResources(ctx context.Context, o OPNsense, kind stri
 	if grid.Total == nil || grid.Rows == nil || *grid.Total != len(grid.Rows) || len(grid.Rows) > 10000 {
 		return nil, unavailable("provider resource inventory is incomplete")
 	}
-	out := []Resource{}
 	seen := map[string]bool{}
 	for _, row := range grid.Rows {
-		if seen[row.UUID] {
-			return nil, unavailable("duplicate provider resource identity")
+		if !uuidPattern.MatchString(row.UUID) || seen[row.UUID] {
+			return nil, unavailable("invalid or duplicate provider resource identity")
 		}
 		seen[row.UUID] = true
-		r, e := p.getResource(ctx, o, kind, row.UUID)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, r)
 	}
-	return out, nil
+	return readProviderRows(ctx, len(grid.Rows), func(ctx context.Context, index int) (Resource, error) {
+		return p.getResource(ctx, o, kind, grid.Rows[index].UUID)
+	})
 }
 func (p *RealProviders) Snapshot(ctx context.Context, o OPNsense) (ProviderSnapshot, error) {
+	ctx, closeHTTP := withProviderHTTP(ctx)
+	defer closeHTTP()
 	snap := ProviderSnapshot{Resources: []Resource{}, Issues: []string{}}
 	for _, kind := range []string{"reservation", "acl", "domain", "handle", "subdomain", "subnet"} {
 		rows, e := p.listResources(ctx, o, kind)
@@ -250,6 +250,8 @@ func (p *RealProviders) Snapshot(ctx context.Context, o OPNsense) (ProviderSnaps
 	return snap, nil
 }
 func (p *RealProviders) Create(ctx context.Context, o OPNsense, kind string, fields map[string]string) (Resource, error) {
+	ctx, closeHTTP := withProviderHTTP(ctx)
+	defer closeHTTP()
 	if kind == "subnet" {
 		return Resource{}, bad("subnet writes are not supported")
 	}
@@ -274,6 +276,8 @@ func (p *RealProviders) Create(ctx context.Context, o OPNsense, kind string, fie
 	return r, nil
 }
 func (p *RealProviders) Set(ctx context.Context, o OPNsense, old Resource, fields map[string]string) (Resource, error) {
+	ctx, closeHTTP := withProviderHTTP(ctx)
+	defer closeHTTP()
 	if old.Kind == "subnet" {
 		return Resource{}, bad("subnet writes are not supported")
 	}
@@ -304,6 +308,8 @@ func (p *RealProviders) Set(ctx context.Context, o OPNsense, old Resource, field
 	return r, nil
 }
 func (p *RealProviders) Delete(ctx context.Context, o OPNsense, old Resource) error {
+	ctx, closeHTTP := withProviderHTTP(ctx)
+	defer closeHTTP()
 	if old.Kind == "subnet" {
 		return bad("subnet writes are not supported")
 	}

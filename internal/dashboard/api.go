@@ -196,6 +196,8 @@ func NewAPI(s *Service, auth APIAuth, frontend http.Handler) http.Handler {
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 			defer cancel()
+			ctx, closeHTTP := withProviderHTTP(ctx)
+			defer closeHTTP()
 			r = r.WithContext(ctx)
 		}
 		mux.ServeHTTP(w, r)
