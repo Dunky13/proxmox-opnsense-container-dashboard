@@ -53,6 +53,8 @@ func TestDiscoveryUsesSavedAuthAndOnlyItsController(t *testing.T) {
 				}
 				ep, _ := resourceEndpoint(kind)
 				switch r.URL.Path {
+				case "/api/caddy/general/get":
+					writeJSON(w, 200, map[string]any{"caddy": map[string]any{"general": map[string]any{"enabled": "0", "accesslist": "", "ClientIpHeaders": ""}}})
 				case "/api/" + ep.Controller + "/search_" + ep.Command:
 					if r.URL.Query().Get("current") != "1" || r.URL.Query().Get("rowCount") != "-1" {
 						t.Error("unbounded/partial discovery")
@@ -266,7 +268,7 @@ func TestSharedListReuseTwoAppsAndCleanupProtectsExternalPolicy(t *testing.T) {
 }
 
 func TestSharedPrivatePolicySafetyDoesNotBlockPublicOrCleanup(t *testing.T) {
-	for _, tc := range []struct{ field, value string }{{"delete", ""}, {"clientIps", ""}, {"clientIps", "0.0.0.0/0"}, {"clientIps", "0.0.0.0/1,128.0.0.0/1"}, {"clientIps", "::/1,8000::/1"}, {"clientIps", "192.168.6.1/24"}, {"accesslistInvert", "1"}, {"RequestMatcher", "client_ip"}} {
+	for _, tc := range []struct{ field, value string }{{"delete", ""}, {"clientIps", ""}, {"clientIps", "0.0.0.0/0"}, {"clientIps", "0.0.0.0/1,128.0.0.0/1"}, {"clientIps", "::/1,8000::/1"}, {"clientIps", "192.168.6.1/24"}, {"accesslistInvert", "1"}, {"RequestMatcher", "expression"}} {
 		t.Run(tc.field+tc.value, func(t *testing.T) {
 			s, _, store := demoService(t)
 			selectShared(t, store, sharedDemoACL)

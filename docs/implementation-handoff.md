@@ -14,7 +14,7 @@ App and OS updates use fixed commands over strict SSH to Proxmox. Unknown outcom
 
 ## Validation and delivery
 
-Local validation passed: TypeScript, lint, production frontend build, 31 frontend tests, Go tests with `-p 2`, Go vet, 14 Playwright browser tests with one worker, and workflow validation with actionlint. Browser coverage includes desktop/mobile, both themes, keyboard navigation, accessibility checks, stale inventory, private/public plans, recovery, shared ACL discovery and independent app upstreams. Provider round trips use realistic HTTPS fixtures; demo changes never contact real providers.
+Local validation passed: TypeScript, lint, production frontend build, 32 frontend tests, Go tests with `-p 2`, Go vet, 15 Playwright browser tests with one worker, and workflow validation with actionlint. Browser coverage includes desktop/mobile, both themes, keyboard navigation, accessibility checks, stale inventory, legacy app recovery, private/public plans, recovery, shared ACL discovery and independent app upstreams. Provider round trips use realistic HTTPS fixtures; demo changes never contact real providers.
 
 GitHub Actions checks pull requests and `main`, builds static Linux AMD64/ARM64 binaries with embedded assets, and uploads archives with installation files, checksums and the exact source commit. Screenshot evidence is uploaded separately. Artifacts expire after 14 days. Deploy the successful merged-main artifact after checking `SOURCE_COMMIT` and `SHA256SUMS`; do not substitute a local rebuild.
 

@@ -113,7 +113,26 @@ export const inventorySchema = z.object({
   containers: list(containerSchema),
   hosts: list(hostInventorySchema),
 });
+export const clientIPContextSchema = z.object({
+  trustedProxyListId: z.union([z.uuid(), z.literal('')]),
+  trustedProxyCidrs: z.array(text),
+  headers: z.array(z.object({ id: z.uuid(), type: text })),
+  headerOrder: text,
+  enableLayer4: text,
+  layer4EmptyVerified: z.boolean().optional(),
+  proxyProtocolAllow: text,
+  suitable: z.boolean(),
+  reason: text,
+  summary: text,
+});
+const accessListReferenceSchema = z.object({
+  id: z.uuid(),
+  fingerprint: text,
+  clientIpContextFingerprint: text.optional(),
+  clientIpContext: clientIPContextSchema.optional(),
+});
 export const accessListSchema = z.object({
+  clientIpContext: clientIPContextSchema.optional(),
   id: z.uuid(),
   name: text,
   description: text,
@@ -165,7 +184,7 @@ const ownedResourceSchema = z.object({
 });
 export const operationSchema = z.object({
   resolvedSubnet: subnetReferenceSchema.optional(),
-  sharedAccessList: z.object({ id: z.uuid(), fingerprint: text }).optional(),
+  sharedAccessList: accessListReferenceSchema.optional(),
   desiredRoute: routeSchema.optional(),
   id: text,
   planId: text,
@@ -188,7 +207,7 @@ export const reconciliationSchema = z.object({
 });
 export const planSchema = z.object({
   resolvedSubnet: subnetReferenceSchema.optional(),
-  sharedAccessList: z.object({ id: z.uuid(), fingerprint: text }).optional(),
+  sharedAccessList: accessListReferenceSchema.optional(),
   id: text,
   action: z.enum(['ensure', 'cleanup']),
   key: text,
@@ -244,6 +263,7 @@ export const jobLogsSchema = z.object({
   truncated: z.boolean(),
 });
 export const providerSnapshotSchema = z.object({
+  clientIpContext: clientIPContextSchema.optional(),
   resources: list(
     z.object({ id: text, kind: text, fields: z.record(text, text) }),
   ),

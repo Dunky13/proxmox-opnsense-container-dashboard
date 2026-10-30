@@ -439,10 +439,11 @@ type Resource struct {
 func (r Resource) Fingerprint() string { return fingerprint(r) }
 
 type ProviderSnapshot struct {
-	Resources []Resource `json:"resources"`
-	Subnet    string     `json:"subnet"`
-	Ready     bool       `json:"ready"`
-	Issues    []string   `json:"issues"`
+	ClientIPContext *ClientIPContext `json:"clientIpContext,omitempty"`
+	Resources       []Resource       `json:"resources"`
+	Subnet          string           `json:"subnet"`
+	Ready           bool             `json:"ready"`
+	Issues          []string         `json:"issues"`
 }
 
 func (p ProviderSnapshot) Find(id, kind string) (Resource, bool) {

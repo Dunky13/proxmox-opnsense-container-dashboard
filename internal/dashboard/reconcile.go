@@ -54,7 +54,7 @@ func (s *Service) Reconcile(ctx context.Context) Reconciliation {
 			a := AccessList{ID: o.PrivateAccessListID, CIDRs: []string{}, Reason: "Definition unavailable; refresh provider state. Private plans require fresh verification."}
 			if !failures[h.ID] {
 				if r, exists := snapshots[h.ID].Find(o.PrivateAccessListID, "acl"); exists {
-					a = describeAccessList(r)
+					a = describePolicyAccessList(r, snapshots[h.ID])
 				} else {
 					a.Reason = "Selected shared access list is missing."
 				}

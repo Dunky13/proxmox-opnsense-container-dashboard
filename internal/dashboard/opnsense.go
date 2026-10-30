@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -59,6 +60,23 @@ func normalizeValue(v any) (string, error) {
 		return "0", nil
 	case nil:
 		return "", nil
+	case []any:
+		// PHP serializes consecutive numeric option keys as a JSON array. Keep
+		// those keys as their indexes; translated labels are never stored values.
+		options := make(map[string]any, len(x))
+		for index, entry := range x {
+			option, ok := entry.(map[string]any)
+			if !ok {
+				return "", unavailable("unsupported provider field shape")
+			}
+			switch option["selected"] {
+			case true, false, float64(0), float64(1), "0", "1", "true", "false":
+			default:
+				return "", unavailable("unsupported provider option selection")
+			}
+			options[strconv.Itoa(index)] = option
+		}
+		return normalizeValue(options)
 	case map[string]any:
 		keys := []string{}
 		for k, entry := range x {
@@ -168,23 +186,16 @@ func (p *RealProviders) Snapshot(ctx context.Context, o OPNsense) (ProviderSnaps
 		}
 		snap.Resources = append(snap.Resources, rows...)
 	}
-	var global struct {
-		Caddy struct {
-			General map[string]any `json:"general"`
-		} `json:"caddy"`
+	general, clientIP, err := p.caddyGeneral(ctx, o, snap.Resources)
+	if err != nil {
+		return snap, err
 	}
-	if e := opnJSON(ctx, o, "GET", "caddy/general/get", nil, &global); e != nil {
-		return snap, e
-	}
-	enabled, e := normalizeValue(global.Caddy.General["enabled"])
-	if e != nil || enabled != "1" {
+	if general.Fields["enabled"] != "1" {
 		snap.Issues = append(snap.Issues, "Caddy must already be enabled in global settings")
 	}
-	globalACL, e := normalizeValue(global.Caddy.General["accesslist"])
-	if e != nil {
-		return snap, e
-	}
-	snap.Resources = append(snap.Resources, Resource{ID: "general", Kind: "caddyGeneral", Fields: map[string]string{"enabled": enabled, "accesslist": globalACL}})
+	snap.ClientIPContext = clientIP
+	snap.Resources = append(snap.Resources, general)
+
 	var kea struct {
 		DHCPv4 struct {
 			General map[string]any `json:"general"`

@@ -302,8 +302,11 @@ func planEffects(action string, h Host, o OPNsense, inv Inventory, own Ownership
 		if err != nil {
 			return nil, nil, err
 		}
-		a := describeAccessList(shared)
+		a := describePolicyAccessList(shared, snap)
 		effects = append(effects, PlanEffect{Kind: "acl", Action: "retain", ResourceID: a.ID, Name: "Reuse shared access list: " + a.Name + " (unchanged, excluded from cleanup)", Changes: []FieldChange{{"clientCidrs", strings.Join(a.CIDRs, ","), strings.Join(a.CIDRs, ",")}, {"requestMatcher", a.Matcher, a.Matcher}}})
+		if a.ClientIPContext != nil {
+			notes = append(notes, a.ClientIPContext.Summary, "The reviewed client IP trust context is rechecked before every mutation and service application, including recovery. Global trust lists and headers remain external and unchanged.")
+		}
 		notes = append(notes, "The shared access list remains externally managed and unchanged. It is excluded from dashboard ownership and cleanup.")
 	}
 	notes = append(notes, "KEA subnet resolved from the intended IPv4: "+subnet.CIDR+" ("+subnet.ID+"). The existing subnet remains unchanged.")

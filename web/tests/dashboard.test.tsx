@@ -35,6 +35,86 @@ afterEach(() => {
 });
 
 describe('authentication and inventory', () => {
+  it('does not invent legacy app values when its inspector opens during an outage and the host recovers', async () => {
+    let phase = 'healthy';
+    let plans = 0;
+    mockApi((path, init) => {
+      if (path === '/plans' && init?.method === 'POST') plans++;
+      if (path !== '/reconciliation') return undefined;
+      const legacy = {
+        ...reconciliation,
+        inventory: {
+          ...reconciliation.inventory,
+          containers: reconciliation.inventory.containers.map((c) =>
+            c.key === 'main:604' ? { ...c, desiredRoute: undefined } : c,
+          ),
+        },
+        items: reconciliation.items.map((item) =>
+          item.key === 'main:604'
+            ? {
+                ...item,
+                state: 'mismatch',
+                owned: true,
+                desiredRoute: undefined,
+                routeUnavailable: true,
+              }
+            : item,
+        ),
+      };
+      if (phase !== 'failed') return json(JSON.stringify(legacy));
+      return json(
+        JSON.stringify({
+          ...legacy,
+          inventory: {
+            ...legacy.inventory,
+            complete: false,
+            containers: legacy.inventory.containers.filter(
+              (c) => c.hostId !== 'main',
+            ),
+            hosts: legacy.inventory.hosts.map((h) =>
+              h.hostId === 'main'
+                ? {
+                    ...h,
+                    complete: false,
+                    error: 'Host read unavailable',
+                    nextVmid: null,
+                    guests: [],
+                  }
+                : h,
+            ),
+          },
+          items: legacy.items.map((item) =>
+            item.key === 'main:604'
+              ? { ...item, state: 'unknown', routeUnavailable: undefined }
+              : item,
+          ),
+        }),
+      );
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole('button', { name: 'Configure immich, VMID 604' });
+    phase = 'failed';
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await screen.findByText('Host read unavailable');
+    await user.click(
+      screen.getByRole('button', { name: 'Configure immich, VMID 604' }),
+    );
+    phase = 'recovered';
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await screen.findByText('605');
+    expect(screen.getByLabelText('Upstream scheme')).toHaveValue('');
+    expect(screen.getByLabelText('Upstream port')).toHaveValue(null);
+    const review = screen.getByRole('button', {
+      name: 'Review network change',
+    });
+    expect(review).toBeDisabled();
+    expect(plans).toBe(0);
+    await user.selectOptions(screen.getByLabelText('Upstream scheme'), 'https');
+    expect(review).toBeDisabled();
+    await user.type(screen.getByLabelText('Upstream port'), '8443');
+    expect(review).toBeEnabled();
+  });
   it('withdraws allocation and updates after a failed refresh while keeping observed containers', async () => {
     let failed = false;
     mockApi((path) =>

@@ -182,7 +182,17 @@ export function FirewallDiscovery({
               {lists.accessLists.map((a) => (
                 <li key={a.id}>
                   <strong>{a.name || a.id}</strong>:{' '}
-                  {a.cidrs.join(', ') || 'No CIDRs'}. {a.description}{' '}
+                  {a.cidrs.join(', ') || 'No CIDRs'}. Matcher: {a.matcher}.{' '}
+                  {a.description}{' '}
+                  {a.clientIpContext && (
+                    <span>
+                      {a.clientIpContext.summary}{' '}
+                      {a.clientIpContext.trustedProxyCidrs.length > 0 &&
+                        `Trusted proxy CIDRs: ${a.clientIpContext.trustedProxyCidrs.join(', ')}. `}
+                      {a.clientIpContext.headers.length > 0 &&
+                        `Selected headers: ${a.clientIpContext.headers.map((h) => h.type).join(', ')}. `}
+                    </span>
+                  )}
                   {!a.suitable && <span>Unavailable: {a.reason}</span>}
                 </li>
               ))}

@@ -25,7 +25,23 @@ const discovery = {
       name: 'Shared LAN and VPN',
       description: 'Manual sites also use this policy',
       cidrs: ['10.8.0.0/24', '192.168.6.0/24'],
-      matcher: 'remote_ip',
+      matcher: 'client_ip',
+      clientIpContext: {
+        trustedProxyListId: 'aaaaaaaa-4444-4444-8444-444444444444',
+        trustedProxyCidrs: ['192.0.2.0/24'],
+        headers: [
+          {
+            id: 'aaaaaaaa-5555-4555-8555-555555555555',
+            type: 'X-Forwarded-For',
+          },
+        ],
+        headerOrder: 'configured',
+        enableLayer4: '0',
+        proxyProtocolAllow: '',
+        suitable: true,
+        reason: '',
+        summary: 'client_ip preserves configured Caddy trust.',
+      },
       inversion: '0',
       suitable: true,
       reason: '',
@@ -38,7 +54,7 @@ const discovery = {
       matcher: 'client_ip',
       inversion: '0',
       suitable: false,
-      reason: 'Only remote_ip is supported.',
+      reason: 'Unsafe global trusted proxy CIDRs.',
     },
   ],
 };
@@ -138,6 +154,15 @@ describe('saved firewall discovery', () => {
     );
     await screen.findByRole('option', { name: 'Shared LAN and VPN' });
     expect(select).toHaveValue('');
+    expect(
+      screen.getByRole('option', { name: 'Shared LAN and VPN' }),
+    ).toBeEnabled();
+    expect(
+      screen.getByLabelText('Discovered Caddy access lists'),
+    ).toHaveTextContent('Matcher: client_ip');
+    expect(
+      screen.getByLabelText('Discovered Caddy access lists'),
+    ).toHaveTextContent('Selected headers: X-Forwarded-For');
     expect(
       screen.getByRole('option', { name: /Forwarded clients/ }),
     ).toBeDisabled();

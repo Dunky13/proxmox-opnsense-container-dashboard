@@ -18,6 +18,7 @@ type Providers interface {
 	Inventory(context.Context, Config) Inventory
 	Snapshot(context.Context, OPNsense) (ProviderSnapshot, error)
 	AccessLists(context.Context, OPNsense) ([]Resource, error)
+	CaddyPolicy(context.Context, OPNsense) (CaddyPolicySnapshot, error)
 	Subnets(context.Context, OPNsense) ([]Resource, error)
 	Create(context.Context, OPNsense, string, map[string]string) (Resource, error)
 	Set(context.Context, OPNsense, Resource, map[string]string) (Resource, error)

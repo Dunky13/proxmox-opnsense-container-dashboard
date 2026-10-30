@@ -336,7 +336,10 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 		if err != nil {
 			return Plan{}, err
 		}
-		p.SharedAccessList = &AccessListReference{shared.ID, shared.Fingerprint()}
+		p.SharedAccessList = referenceAccessList(shared, snap)
+		if err := sharedContextNotOwned(st, o, snap, false); err != nil {
+			return Plan{}, err
+		}
 	}
 	e = s.Store.Update(func(st *State) error {
 		for id, p := range st.Plans {
@@ -558,6 +561,17 @@ func (w *workflow) upsert(kind string, fields map[string]string) (Resource, erro
 		if same {
 			return old, nil
 		}
+		if kind == "acl" {
+			policy, err := w.s.Providers.CaddyPolicy(w.ctx, w.router)
+			if err != nil {
+				return Resource{}, err
+			}
+			general, ok := policy.snapshot().Find("general", "caddyGeneral")
+			trustedID, observed := general.Fields["accesslist"]
+			if !ok || !observed || trustedID == old.ID {
+				return Resource{}, conflict("global trusted proxy policy must remain externally managed and unchanged")
+			}
+		}
 	}
 	if e := w.checkEnsureDependencies(); e != nil {
 		return Resource{}, e
@@ -702,11 +716,14 @@ func (w *workflow) checkShared(public bool) error {
 	if public || w.router.PrivateAccessListID == "" {
 		return nil
 	}
-	rows, err := w.s.Providers.AccessLists(w.ctx, w.router)
+	policy, err := w.s.Providers.CaddyPolicy(w.ctx, w.router)
 	if err != nil {
 		return unavailable("shared access list could not be verified before application")
 	}
-	return verifySharedAccessList(w.router, ProviderSnapshot{Resources: rows}, w.op.SharedAccessList, false)
+	if err := sharedContextNotOwned(w.s.Store.Read(), w.router, policy.snapshot(), false); err != nil {
+		return err
+	}
+	return verifySharedAccessList(w.router, policy.snapshot(), w.op.SharedAccessList, false)
 }
 func (w *workflow) checkEnsureDependencies() error {
 	if w.op.Action != "ensure" {
@@ -858,6 +875,9 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 			return op, e
 		}
 		if op.Action == "ensure" {
+			if e = sharedContextNotOwned(st, o, snap, own.Public); e != nil {
+				return op, e
+			}
 			if e = verifySharedAccessList(o, snap, op.SharedAccessList, own.Public); e != nil {
 				return op, e
 			}

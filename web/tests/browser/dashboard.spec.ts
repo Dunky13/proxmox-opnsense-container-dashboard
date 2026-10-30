@@ -47,6 +47,72 @@ async function navigate(page: Page, name: string) {
     .getByRole('button', { name, exact: false })
     .click();
 }
+test('legacy inspector opened during a host outage requires deliberate upstream values after recovery', async ({
+  page,
+}) => {
+  await fixtures(page);
+  let failed = false;
+  await page.route('**/api/v1/reconciliation', (route) =>
+    route.fulfill({
+      json: {
+        ...reconciliation,
+        inventory: {
+          ...reconciliation.inventory,
+          complete: !failed,
+          containers: reconciliation.inventory.containers
+            .filter((c) => !failed || c.hostId !== 'main')
+            .map((c) =>
+              c.key === 'main:604' ? { ...c, desiredRoute: undefined } : c,
+            ),
+          hosts: reconciliation.inventory.hosts.map((h) =>
+            failed && h.hostId === 'main'
+              ? {
+                  ...h,
+                  complete: false,
+                  error: 'Host read unavailable',
+                  nextVmid: null,
+                  guests: [],
+                }
+              : h,
+          ),
+        },
+        items: reconciliation.items.map((item) =>
+          item.key === 'main:604'
+            ? {
+                ...item,
+                owned: true,
+                desiredRoute: undefined,
+                state: failed ? 'unknown' : 'mismatch',
+                routeUnavailable: failed ? undefined : true,
+              }
+            : item,
+        ),
+      },
+    }),
+  );
+  await page.goto('/');
+  await expect(page.getByText('605', { exact: true })).toBeVisible();
+  failed = true;
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(page.getByText('Host read unavailable')).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Configure immich, VMID 604' })
+    .click();
+  failed = false;
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(page.getByText('605', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Upstream scheme')).toHaveValue('');
+  await expect(page.getByLabel('Upstream port')).toHaveValue('');
+  const review = page.getByRole('button', {
+    name: 'Review network change',
+    exact: true,
+  });
+  await expect(review).toBeDisabled();
+  await page.getByLabel('Upstream scheme').selectOption('https');
+  await expect(review).toBeDisabled();
+  await page.getByLabel('Upstream port').fill('8443');
+  await expect(review).toBeEnabled();
+});
 for (const viewport of [
   { name: 'desktop', width: 1600, height: 1000 },
   { name: 'mobile', width: 390, height: 844 },

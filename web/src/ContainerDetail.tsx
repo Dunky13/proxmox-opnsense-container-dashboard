@@ -245,7 +245,8 @@ export function ContainerDetail({
 }) {
   const c = view.container;
   const persisted = c.desiredRoute ?? view.item?.desiredRoute;
-  const routeUnavailable = !!view.item?.routeUnavailable;
+  const routeUnavailable =
+    !!view.item?.routeUnavailable || (!!view.item?.owned && !persisted);
   const [scheme, setScheme] = useState(
     persisted?.scheme ?? (routeUnavailable ? '' : 'http'),
   );

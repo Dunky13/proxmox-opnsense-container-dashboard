@@ -30,10 +30,14 @@ func NewDemo(store *Store) (*DemoProviders, error) {
 		if e := store.Update(func(st *State) error {
 			st.Config = Config{Revision: 1, Hosts: hosts, OPNsenses: []OPNsense{o}}
 			st.DemoResources = map[string][]Resource{o.ID: {
+				{ID: "general", Kind: "caddyGeneral", Fields: map[string]string{"enabled": "1", "accesslist": "aaaaaaaa-4444-4444-8444-444444444444", "ClientIpHeaders": "aaaaaaaa-5555-4555-8555-555555555555", "EnableLayer4": "0", "ProxyProtocolAllow": ""}},
+				{ID: "aaaaaaaa-3333-4333-8333-333333333333", Kind: "acl", Fields: map[string]string{"accesslistName": "Shared client LAN and VPN", "clientIps": "10.8.0.0/24,192.168.6.0/24,192.168.7.0/24,fd00:1234::/64", "accesslistInvert": "0", "RequestMatcher": "client_ip", "HttpResponseCode": "403", "description": "External client IP policy with configured proxy trust"}},
+				{ID: "aaaaaaaa-4444-4444-8444-444444444444", Kind: "acl", Fields: map[string]string{"accesslistName": "Trusted proxy fixture", "clientIps": "192.0.2.0/24,2001:db8::/32", "accesslistInvert": "0", "RequestMatcher": "remote_ip"}},
+				{ID: "aaaaaaaa-5555-4555-8555-555555555555", Kind: "caddyClientIPHeader", Fields: map[string]string{"HeaderType": "X-Forwarded-For"}},
 				{ID: "11111111-1111-4111-8111-111111111111", Kind: "subnet", Fields: map[string]string{"subnet": "192.168.6.0/24", "subnet_id": "6", "description": "Container VLAN 6"}},
 				{ID: "22222222-2222-4222-8222-222222222222", Kind: "subnet", Fields: map[string]string{"subnet": "192.168.7.0/24", "subnet_id": "7", "description": "Container VLAN 7"}},
 				{ID: "aaaaaaaa-1111-4111-8111-111111111111", Kind: "acl", Fields: map[string]string{"accesslistName": "Shared LAN and VPN", "clientIps": "10.8.0.0/24,192.168.6.0/24,192.168.7.0/24,fd00:1234::/64", "accesslistInvert": "0", "RequestMatcher": "remote_ip", "HttpResponseCode": "403", "description": "Operator-managed LAN and VPN policy; also used by manual sites"}},
-				{ID: "aaaaaaaa-2222-4222-8222-222222222222", Kind: "acl", Fields: map[string]string{"accesslistName": "Forwarded client policy", "clientIps": "192.168.6.0/24", "accesslistInvert": "0", "RequestMatcher": "client_ip", "HttpResponseCode": "403", "description": "Unsupported forwarded client matcher"}},
+				{ID: "aaaaaaaa-2222-4222-8222-222222222222", Kind: "acl", Fields: map[string]string{"accesslistName": "Forwarded client policy", "clientIps": "192.168.6.0/24", "accesslistInvert": "1", "RequestMatcher": "client_ip", "HttpResponseCode": "403", "description": "Inverted policy is unsuitable for private routes"}},
 			}}
 			return nil
 		}); e != nil {
@@ -95,6 +99,11 @@ func (p *DemoProviders) Snapshot(ctx context.Context, o OPNsense) (ProviderSnaps
 	if st.DemoResources != nil {
 		out.Resources = append(out.Resources, st.DemoResources[o.ID]...)
 	}
+	policy, err := p.CaddyPolicy(ctx, o)
+	if err != nil {
+		return out, err
+	}
+	out.ClientIPContext = policy.ClientIPContext
 	return out, nil
 }
 func (p *DemoProviders) Create(ctx context.Context, o OPNsense, kind string, fields map[string]string) (Resource, error) {

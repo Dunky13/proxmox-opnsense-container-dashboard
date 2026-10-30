@@ -47,12 +47,20 @@ test('saved Caddy selection, automatic VLAN subnets, per-app upstreams and uncha
     .getByRole('button', { name: 'Fetch saved Caddy access lists' })
     .click();
   const lists = accessListDiscoverySchema.parse(await (await fetched).json());
-  const shared = lists.accessLists.find((a) => a.name === 'Shared LAN and VPN');
+  const shared = lists.accessLists.find(
+    (a) => a.name === 'Shared client LAN and VPN',
+  );
   if (!shared) throw new Error('Shared demo policy missing');
   await expect(page.getByLabel('Default private access list')).toHaveValue('');
   await expect(
     page.getByRole('option', { name: /Forwarded client policy/ }),
   ).toBeDisabled();
+  await expect(
+    page.getByRole('option', { name: 'Shared client LAN and VPN' }),
+  ).toBeEnabled();
+  await expect(page.getByLabel('Discovered Caddy access lists')).toContainText(
+    'Selected headers: X-Forwarded-For',
+  );
   await page
     .getByRole('button', { name: 'Discover saved KEA subnets' })
     .click();
@@ -104,6 +112,8 @@ test('saved Caddy selection, automatic VLAN subnets, per-app upstreams and uncha
     ).json(),
   );
   const sharedBefore = snapshot.resources.find((r) => r.id === shared.id);
+  const contextBefore = snapshot.clientIpContext;
+  expect(contextBefore?.suitable).toBe(true);
   await page
     .getByRole('navigation', { name: 'Main navigation' })
     .filter({ visible: true })
@@ -134,7 +144,10 @@ test('saved Caddy selection, automatic VLAN subnets, per-app upstreams and uncha
       .getByRole('button', { name: 'Review network change', exact: true })
       .click();
     await expect(page.getByLabel('Review network plan')).toContainText(
-      'Reuse shared access list: Shared LAN and VPN',
+      'Reuse shared access list: Shared client LAN and VPN',
+    );
+    await expect(page.getByLabel('Review network plan')).toContainText(
+      'client_ip preserves',
     );
     await expect(page.getByLabel('Review network plan')).toContainText(
       app.subnet,
@@ -144,7 +157,7 @@ test('saved Caddy selection, automatic VLAN subnets, per-app upstreams and uncha
       page.getByRole('heading', { name: 'Review network change' }),
     ).not.toBeVisible();
     await expect(page.getByText(/Default shared private policy/)).toContainText(
-      'Shared LAN and VPN',
+      'Shared client LAN and VPN',
     );
     await page.getByRole('button', { name: 'Close container details' }).click();
   }
@@ -166,6 +179,7 @@ test('saved Caddy selection, automatic VLAN subnets, per-app upstreams and uncha
     ).json(),
   );
   expect(after.resources.find((r) => r.id === shared.id)).toEqual(sharedBefore);
+  expect(after.clientIpContext).toEqual(contextBefore);
   expect(
     after.resources.filter(
       (r) => r.kind === 'domain' && r.fields.accesslist === shared.id,
