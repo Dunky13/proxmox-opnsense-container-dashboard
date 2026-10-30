@@ -29,6 +29,8 @@ func pveGet(ctx context.Context, h Host, path string, out any) error {
 	return nil
 }
 func (p *RealProviders) Inventory(ctx context.Context, cfg Config) Inventory {
+	ctx, closeHTTP := withProviderHTTP(ctx)
+	defer closeHTTP()
 	inv := Inventory{ObservedAt: time.Now().UTC(), Complete: true, Containers: []Container{}, Hosts: []HostInventory{}}
 	for _, h := range cfg.Hosts {
 		cs, guests, e := p.hostInventory(ctx, h)
@@ -107,7 +109,8 @@ func (p *RealProviders) hostInventory(ctx context.Context, h Host) ([]Container,
 	generationSeen := map[string]bool{}
 	guests := []Guest{}
 	containers := []Container{}
-	for _, r := range rows {
+	local := []int{}
+	for index, r := range rows {
 		if r.VMID < 100 || !slug.MatchString(r.Node) || (r.Type != "lxc" && r.Type != "qemu") || seen[r.VMID] {
 			return nil, nil, unavailable("invalid or ambiguous cluster inventory")
 		}
@@ -119,14 +122,39 @@ func (p *RealProviders) hostInventory(ctx context.Context, h Host) ([]Container,
 		if r.Status != "running" && r.Status != "stopped" {
 			return nil, nil, unavailable("container status is unknown")
 		}
-		var config map[string]json.RawMessage
+		local = append(local, index)
+	}
+	type networkInterface struct {
+		Name   string `json:"name"`
+		HWAddr string `json:"hwaddr"`
+		Inet   string `json:"inet"`
+	}
+	type observation struct {
+		config       map[string]json.RawMessage
+		interfaces   []networkInterface
+		networkError bool
+	}
+	observations, err := readProviderRows(ctx, len(local), func(ctx context.Context, index int) (observation, error) {
+		r := rows[local[index]]
+		var observed observation
 		path := "/nodes/" + url.PathEscape(r.Node) + "/lxc/" + strconv.Itoa(r.VMID)
-		if e := pveGet(ctx, h, path+"/config", &config); e != nil {
-			return nil, nil, e
+		if e := pveGet(ctx, h, path+"/config", &observed.config); e != nil {
+			return observed, e
 		}
-		if len(config) == 0 {
-			return nil, nil, unavailable("missing container configuration")
+		if len(observed.config) == 0 {
+			return observed, unavailable("missing container configuration")
 		}
+		if r.Status == "running" {
+			observed.networkError = pveGet(ctx, h, path+"/interfaces", &observed.interfaces) != nil
+		}
+		return observed, nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	for index, observed := range observations {
+		r := rows[local[index]]
+		config := observed.config
 		text := func(k string) string { var v string; _ = json.Unmarshal(config[k], &v); return v }
 		name := text("hostname")
 		if name == "" {
@@ -142,15 +170,10 @@ func (p *RealProviders) hostInventory(ctx context.Context, h Host) ([]Container,
 		}
 		warnings := []string{}
 		if r.Status == "running" {
-			var interfaces []struct {
-				Name   string `json:"name"`
-				HWAddr string `json:"hwaddr"`
-				Inet   string `json:"inet"`
-			}
-			if e := pveGet(ctx, h, path+"/interfaces", &interfaces); e != nil {
+			if observed.networkError {
 				warnings = append(warnings, "runtime network unavailable")
 			} else {
-				for _, in := range interfaces {
+				for _, in := range observed.interfaces {
 					if strings.EqualFold(in.HWAddr, mac) && mac != "" {
 						if a, e := netip.ParsePrefix(in.Inet); e == nil {
 							ip = a.Addr().String()
