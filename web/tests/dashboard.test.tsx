@@ -769,7 +769,7 @@ describe('settings form revisions and credentials', () => {
     await user.click(
       screen.getByRole('button', { name: 'Configure jellyfin, VMID 701' }),
     );
-    expect(screen.getByLabelText('Upstream port')).toHaveValue(80);
+    expect(screen.getByLabelText('Upstream port')).toHaveValue(null);
     expect(screen.getByLabelText('Upstream scheme')).toHaveValue('http');
   });
   it('saves blank credentials by omission and keeps read-only flags off the wire', async () => {

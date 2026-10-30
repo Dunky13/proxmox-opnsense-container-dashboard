@@ -159,6 +159,16 @@ test.describe('real isolated demo API', () => {
       data.inventory.containers.find((c) => c.key === 'main:604')?.desiredRoute
         ?.public,
     ).toBe(true);
+    await page
+      .getByRole('button', { name: 'Check maintenance readiness' })
+      .click();
+    await expect(page.getByText(/Simulated maintenance/)).toContainText(
+      'source: demo',
+    );
+    await page.screenshot({
+      path: `${evidenceDir}/embedded-demo-maintenance-readiness.png`,
+      fullPage: true,
+    });
     await page.getByRole('button', { name: 'App update', exact: true }).click();
     const createdResponse = page.waitForResponse(
       (response) =>

@@ -63,7 +63,11 @@ func TestProxmoxRealShapesStoppedAndFailures(t *testing.T) {
 	h.TokenID = "dashboard@pve!test"
 	h.TokenSecret = "secret"
 	h.Node = "pve"
-	p := &RealProviders{}
+	h.SSH.Enabled = true
+	p := &RealProviders{SSH: sshRunFunc(func(context.Context, Host, int, string) (RunResult, error) {
+		t.Error("bulk inventory must not run SSH")
+		return RunResult{}, nil
+	})}
 	inv := p.Inventory(context.Background(), Config{Hosts: []Host{h}})
 	if !inv.Complete || len(inv.Containers) != 2 || inv.Hosts[0].NextVMID == nil || *inv.Hosts[0].NextVMID != 603 {
 		t.Fatalf("inventory %+v", inv)

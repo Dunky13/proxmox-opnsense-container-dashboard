@@ -373,6 +373,7 @@ export function InventoryView({
               <ContainerDetail
                 key={`${current.container.key}:${current.container.identity}`}
                 view={current}
+                onSettings={onSettings}
                 data={data}
                 api={api}
                 jobs={jobs}

@@ -211,16 +211,7 @@ func (p *RealProviders) hostInventory(ctx context.Context, h Host) ([]Container,
 			ct.Fingerprint = ""
 			ct.Warnings = append(ct.Warnings, "configuration digest unavailable")
 		}
-		if h.SSH.Enabled && r.Status == "running" && !ct.Template {
-			result, e := p.Run(ctx, h, r.VMID, "inspect")
-			if e != nil {
-				ct.Warnings = append(ct.Warnings, "SSH distribution inspection unavailable")
-			} else {
-				ct.Distribution = result.Distribution
-				ct.Version = result.Version
-				ct.DistroSource = "ssh"
-			}
-		}
+
 		containers = append(containers, ct)
 	}
 	return containers, guests, nil

@@ -40,10 +40,29 @@ jobs:
         run: CGO_ENABLED=0 go build -p 2 -trimpath -o bin/container-proxy ./cmd/dashboard
       - name: Install browser
         run: pnpm --dir web exec playwright install --with-deps chromium
+      - name: Capture matching baseline maintenance screenshots
+        env:
+          DASHBOARD_WEB_URL: http://127.0.0.1:18081
+          DASHBOARD_MAINTENANCE_BASELINE: "1"
+          DASHBOARD_EXTERNAL_BASELINE: "1"
+          DASHBOARD_EVIDENCE_DIR: ../.local/evidence
+          DASHBOARD_EXTERNAL_EVIDENCE_DIR: ../.local/evidence
+        run: |
+          mkdir -p .local/ci/baseline
+          git fetch --no-tags origin 63031e32e415d75aebade026729de915e7af50e4
+          git archive 63031e32e415d75aebade026729de915e7af50e4 web | tar -x -C .local/ci/baseline
+          ln -s "$GITHUB_WORKSPACE/web/node_modules" .local/ci/baseline/web/node_modules
+          pnpm --dir .local/ci/baseline/web build
+          pnpm --dir .local/ci/baseline/web exec vite preview --host 127.0.0.1 --port 18081 --strictPort > .local/ci/baseline.log 2>&1 &
+          baseline_pid=$!
+          trap 'kill "$baseline_pid" 2>/dev/null || true; wait "$baseline_pid" 2>/dev/null || true' EXIT
+          curl --retry 20 --retry-delay 1 --retry-connrefused --fail --silent --show-error http://127.0.0.1:18081/
+          pnpm --dir web exec playwright test tests/browser/maintenance.spec.ts tests/browser/external-cleanup.spec.ts --workers=1 --grep 'synthetic Hikyo blocked|external cleanup at matching'
       - name: Verify standalone dashboard in the browser
         env:
           DASHBOARD_WEB_URL: http://127.0.0.1:18080
           DASHBOARD_DEMO_TEST: "1"
+          DASHBOARD_EXTERNAL_EVIDENCE_DIR: ../.local/evidence
         run: |
           mkdir -p .local/ci
           ./bin/container-proxy -demo -listen 127.0.0.1:18080 -state-dir .local/ci/demo > .local/ci/server.log 2>&1 &
@@ -67,7 +86,8 @@ jobs:
           for architecture in amd64 arm64; do
             tar -czf "bin/artifacts/container-proxy-linux-${architecture}.tar.gz" \
               "bin/container-proxy-linux-${architecture}" \
-              deploy/container-proxy.service deploy/dashboard.env.example README.md
+              deploy/container-proxy.service deploy/dashboard.env.example deploy/container-proxy-ssh \
+              docs/container-maintenance.md README.md
           done
           printf '%s\n' "$GITHUB_SHA" > bin/artifacts/SOURCE_COMMIT
           go version > bin/artifacts/BUILD_TOOLCHAIN

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,9 @@ type SSHRunner interface {
 type OpenSSH struct{}
 
 const rebootMarker = "DASHBOARD_REBOOT_REQUIRED"
+
+var distroID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var distroVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$`)
 
 // Retain only enough output to recognize a marker split across writes. Package
 // output may be arbitrarily verbose and is never retained or returned.
@@ -65,6 +69,8 @@ func fixedCommand(id int, kind string) (string, error) {
 	switch kind {
 	case "inspect":
 		return prefix + "cat /etc/os-release", nil
+	case "capabilities":
+		return prefix + `/bin/sh -c 'set -eu; cat /etc/os-release; if test -x /usr/bin/update; then printf "\nDASHBOARD_APP_UPDATE=1\n"; else printf "\nDASHBOARD_APP_UPDATE=0\n"; fi'`, nil
 	case "appUpdate":
 		return prefix + "/usr/bin/update", nil
 	case "osUpdate":
@@ -89,7 +95,7 @@ func (OpenSSH) Run(ctx context.Context, h Host, id int, kind string) (RunResult,
 	cmd.WaitDelay = 2e9
 	out := &boundedOutput{limit: 32768}
 	reboot := &rebootOutput{}
-	if kind == "inspect" {
+	if kind == "inspect" || kind == "capabilities" {
 		cmd.Stdout = out
 	} else if kind == "osUpdate" {
 		cmd.Stdout = reboot
@@ -106,7 +112,28 @@ func (OpenSSH) Run(ctx context.Context, h Host, id int, kind string) (RunResult,
 	if kind == "inspect" {
 		return parseOSRelease(out.b.String())
 	}
+	if kind == "capabilities" {
+		return parseCapabilities(out.b.String())
+	}
 	return RunResult{RebootRequired: reboot.found}, nil
+}
+
+func parseCapabilities(raw string) (RunResult, error) {
+	r, err := parseOSRelease(raw)
+	if err != nil {
+		return r, err
+	}
+	seen := 0
+	for _, line := range strings.Split(raw, "\n") {
+		if line == "DASHBOARD_APP_UPDATE=1" || line == "DASHBOARD_APP_UPDATE=0" {
+			seen++
+			r.AppUpdate = line == "DASHBOARD_APP_UPDATE=1"
+		}
+	}
+	if seen != 1 {
+		return RunResult{}, unavailable("SSH capability response is incomplete")
+	}
+	return r, nil
 }
 func parseOSRelease(raw string) (RunResult, error) {
 	result := RunResult{}
@@ -126,7 +153,7 @@ func parseOSRelease(raw string) (RunResult, error) {
 			result.Version = v
 		}
 	}
-	if result.Distribution == "" {
+	if !distroID.MatchString(result.Distribution) || (result.Version != "" && !distroVersion.MatchString(result.Version)) {
 		return result, unavailable("container distribution is unavailable")
 	}
 	return result, nil

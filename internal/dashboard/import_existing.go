@@ -452,11 +452,10 @@ func (s *Service) applyImport(ctx context.Context, st State, p Plan, h Host, o O
 		if !exists || fingerprint(current) != fingerprint(p) || fingerprint(next.Owned) != p.OwnershipHash || next.Config.Revision != p.Revision || fingerprint(next.Config) != p.ConfigHash || routerBlocked(*next, o.ID) {
 			return conflict("import plan or ownership changed")
 		}
-		if time.Now().After(p.ExpiresAt) {
-			return conflict("plan expired during review verification")
+		if err := consumePlan(next, p); err != nil {
+			return err
 		}
 		next.Owned[c.Key] = own
-		delete(next.Plans, p.ID)
 		next.Operations[op.ID] = op
 		return nil
 	})

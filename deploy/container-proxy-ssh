@@ -1,0 +1,27 @@
+#!/bin/sh
+# Install root:root 0755. Bind ONLY a dedicated key with restrict,command=.
+# Never eval SSH_ORIGINAL_COMMAND. Each accepted string dispatches fixed argv.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+reject() { printf '%s\n' 'Restricted maintenance command refused.' >&2; exit 64; }
+[ "$(id -u)" = 0 ] || reject
+[ -z "${SSH_TTY:-}" ] || reject
+original=${SSH_ORIGINAL_COMMAND:-}
+case "$original" in 'pct exec '*" -- "*) ;; *) reject ;; esac
+vmid=${original#pct exec }
+vmid=${vmid%% -- *}
+case "$vmid" in ''|*[!0-9]*|0*) reject ;; esac
+[ "${#vmid}" -ge 3 ] && [ "${#vmid}" -le 9 ] || reject
+prefix="pct exec $vmid -- "
+command=${original#"$prefix"}
+[ "$original" = "$prefix$command" ] || reject
+case "$command" in
+ 'cat /etc/os-release') exec /usr/sbin/pct exec "$vmid" -- cat /etc/os-release ;;
+ '/usr/bin/update') exec /usr/sbin/pct exec "$vmid" -- /usr/bin/update ;;
+  "/bin/sh -c 'set -eu; cat /etc/os-release; if test -x /usr/bin/update; then printf \"\\nDASHBOARD_APP_UPDATE=1\\n\"; else printf \"\\nDASHBOARD_APP_UPDATE=0\\n\"; fi'")
+  exec /usr/sbin/pct exec "$vmid" -- /bin/sh -c 'set -eu; cat /etc/os-release; if test -x /usr/bin/update; then printf "\nDASHBOARD_APP_UPDATE=1\n"; else printf "\nDASHBOARD_APP_UPDATE=0\n"; fi' ;;
+ "/bin/sh -c 'set -eu; . /etc/os-release; case \"\$ID\" in debian|ubuntu) export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get -y upgrade ;; alpine) apk update; apk upgrade ;; *) exit 64 ;; esac; if [ -f /var/run/reboot-required ]; then printf \"DASHBOARD_REBOOT_REQUIRED\\n\"; fi'")
+  exec /usr/sbin/pct exec "$vmid" -- /bin/sh -c 'set -eu; . /etc/os-release; case "$ID" in debian|ubuntu) export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get -y upgrade ;; alpine) apk update; apk upgrade ;; *) exit 64 ;; esac; if [ -f /var/run/reboot-required ]; then printf "DASHBOARD_REBOOT_REQUIRED\n"; fi' ;;
+ *) reject ;;
+esac
