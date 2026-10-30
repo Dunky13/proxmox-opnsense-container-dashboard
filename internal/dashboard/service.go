@@ -13,22 +13,29 @@ import (
 )
 
 type Service struct {
-	Store      *Store
-	Providers  Providers
-	mutate     sync.Mutex
-	jobsMu     sync.Mutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	workers    sync.WaitGroup
-	slots      chan struct{}
-	JobTimeout time.Duration
+	Store            *Store
+	Providers        Providers
+	mutate           sync.Mutex
+	jobsMu           sync.Mutex
+	ctx              context.Context
+	cancel           context.CancelFunc
+	workers          sync.WaitGroup
+	slots            chan struct{}
+	JobTimeout       time.Duration
+	displayInventory observationCache[Inventory]
+	displayRouters   observationCache[routerObservations]
 }
 
 func NewService(store *Store, p Providers) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{Store: store, Providers: p, ctx: ctx, cancel: cancel, slots: make(chan struct{}, 2), JobTimeout: 30 * time.Minute}
 }
-func (s *Service) Close()               { s.cancel(); s.workers.Wait() }
+func (s *Service) Close() {
+	s.cancel()
+	s.displayInventory.close()
+	s.displayRouters.close()
+	s.workers.Wait()
+}
 func newID() string                     { return oauth2.GenerateVerifier() }
 func (s *Service) Settings() ConfigView { return viewConfig(s.Store.Read().Config) }
 func (s *Service) UpdateConfig(edit ConfigEdit) (ConfigView, error) {
@@ -403,6 +410,8 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		return Operation{}, conflict("another mutation is active")
 	}
 	defer s.mutate.Unlock()
+	s.Store.invalidateObservations()
+	defer s.Store.invalidateObservations()
 	st := s.Store.Read()
 	plan, ok := st.Plans[id]
 	if !ok {
@@ -881,6 +890,8 @@ func serviceApplicationOrder(action string) [2]string {
 func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 	s.mutate.Lock()
 	defer s.mutate.Unlock()
+	s.Store.invalidateObservations()
+	defer s.Store.invalidateObservations()
 	st := s.Store.Read()
 	op, ok := st.Operations[id]
 	if !ok {
@@ -992,8 +1003,11 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 	return op, e
 }
 func (s *Service) Operations() []Operation {
+	return operations(s.Store.Read())
+}
+func operations(st State) []Operation {
 	out := []Operation{}
-	for _, op := range s.Store.Read().Operations {
+	for _, op := range st.Operations {
 		out = append(out, op)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })

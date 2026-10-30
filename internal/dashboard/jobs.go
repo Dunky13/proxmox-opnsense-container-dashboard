@@ -20,6 +20,8 @@ func jobBlocks(j Job) bool {
 func (s *Service) StartJob(ctx context.Context, req JobRequest) (Job, error) {
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
+	s.Store.invalidateObservations()
+	defer s.Store.invalidateObservations()
 	if req.Kind != "appUpdate" && req.Kind != "osUpdate" {
 		return Job{}, bad("unsupported update kind")
 	}
@@ -96,6 +98,8 @@ func (s *Service) saveJob(j *Job, message string) error {
 	return s.Store.Update(func(st *State) error { st.Jobs[j.ID] = *j; return nil })
 }
 func (s *Service) runJob(j Job, h Host, identity string) {
+	s.Store.invalidateObservations()
+	defer s.Store.invalidateObservations()
 	select {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()

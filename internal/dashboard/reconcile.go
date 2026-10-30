@@ -28,18 +28,38 @@ type Reconciliation struct {
 func (s *Service) Reconcile(ctx context.Context) Reconciliation {
 	st := s.Store.Read()
 	inv := s.Providers.Inventory(ctx, st.Config)
-	out := Reconciliation{decorateInventory(inv, st), []ReconcileItem{}, s.Operations()}
+	return reconcile(st, inv, s.observeRouters(ctx, st.Config))
+}
+
+type routerObservations struct {
+	Snapshots map[string]ProviderSnapshot
+	Failures  map[string]bool
+}
+
+func (s *Service) observeRouters(ctx context.Context, cfg Config) routerObservations {
 	snapshots := map[string]ProviderSnapshot{}
 	failures := map[string]bool{}
-	for _, h := range st.Config.Hosts {
-		o := routerForHost(st.Config, h)
-		snap, e := s.Providers.Snapshot(ctx, o)
-		if e != nil {
-			failures[h.ID] = true
-		} else {
-			snapshots[h.ID] = snap
+	byRouter := map[string]ProviderSnapshot{}
+	routerFailures := map[string]bool{}
+	for _, h := range cfg.Hosts {
+		o := routerForHost(cfg, h)
+		if _, read := byRouter[o.ID]; !read && !routerFailures[o.ID] {
+			snap, err := s.Providers.Snapshot(ctx, o)
+			if err != nil {
+				routerFailures[o.ID] = true
+			} else {
+				byRouter[o.ID] = snap
+			}
 		}
+		failures[h.ID] = routerFailures[o.ID]
+		snapshots[h.ID] = byRouter[o.ID]
 	}
+	return routerObservations{snapshots, failures}
+}
+
+func reconcile(st State, inv Inventory, routers routerObservations) Reconciliation {
+	out := Reconciliation{decorateInventory(inv, st), []ReconcileItem{}, operations(st)}
+	snapshots, failures := routers.Snapshots, routers.Failures
 	seen := map[string]bool{}
 	for _, c := range inv.Containers {
 		seen[c.Key] = true

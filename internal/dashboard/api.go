@@ -97,11 +97,13 @@ func NewAPI(s *Service, auth APIAuth, frontend http.Handler) http.Handler {
 		return e
 	})
 	handle("GET /api/v1/inventory", func(w http.ResponseWriter, r *http.Request) error {
-		writeJSON(w, 200, s.Inventory(r.Context()))
+		st, inv, _ := s.displayObservation(r.Context(), false)
+		writeJSON(w, 200, decorateInventory(inv, st))
 		return nil
 	})
 	handle("GET /api/v1/reconciliation", func(w http.ResponseWriter, r *http.Request) error {
-		writeJSON(w, 200, s.Reconcile(r.Context()))
+		st, inv, routers := s.displayObservation(r.Context(), true)
+		writeJSON(w, 200, reconcile(st, inv, routers))
 		return nil
 	})
 	handle("POST /api/v1/plans", func(w http.ResponseWriter, r *http.Request) error {
