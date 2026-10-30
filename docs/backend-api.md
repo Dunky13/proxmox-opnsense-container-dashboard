@@ -35,6 +35,25 @@ Example replacement (secrets omitted preserve existing values):
 
 ## Inventory and reconciliation
 
+Authenticated GET inventory/reconciliation reads share complete raw provider
+observations in service memory for at most 15 seconds from read start (shortened
+by an earlier inventory `observedAt`). Hits preserve `observedAt`; no response is
+stored in the browser. Concurrent GETs join shared work, and a disconnected caller
+does not cancel it for a newer caller. Each shared inventory or firewall snapshot
+set has a 90-second service-bound deadline and is cancelled/joined on shutdown.
+Reconciliation snapshots each distinct configured firewall once across its hosts.
+Failures, incomplete inventory and unready/uncertain snapshots are not cached as
+successful observations. The next GET after expiry fetches external changes.
+
+Every durable state update attempt invalidates display reuse, including settings,
+credential/address/CA changes, ownership, plans, operations, jobs and persistence
+failure. Apply/recovery/job attempts and execution also invalidate at entry/exit,
+even on failure. Old in-flight results cannot become current across invalidation.
+Ownership and unfinished-operation guards are derived from the current store for
+each response. Uncertain persistence yields incomplete display inventory with no
+free-VMID authority. Preflight, discovery, plans, applies, recovery and update jobs
+retain fresh provider reads and all existing mutation guards.
+
 An owned legacy app whose handler cannot be fingerprint-verified has `routeUnavailable:true` and no invented `desiredRoute`. Repair requires explicit per-app scheme and port. Retired firewall defaults are never used to reconstruct an unavailable upstream. Cleanup does not need an app upstream and remains guarded by resource ownership and complete inventory.
 
 Service application and recovery use the same action-specific order: ensure applies KEA then Caddy; cleanup applies Caddy then KEA. If the first service fails, the second is not applied. A failed cleanup recovery therefore cannot release a reservation while its old running proxy route remains active.

@@ -200,7 +200,8 @@ func TestProviderHTTPForbidsRedirectsAndWriteRetries(t *testing.T) {
 	targetConnections.assertClosed(t)
 }
 
-func TestProviderAPIRequestScopeReusesFreshReadsAndCloses(t *testing.T) {
+func providerDisplayAPIFixture(t *testing.T) (http.Handler, *atomic.Int64, *providerConnections) {
+	t.Helper()
 	var reads atomic.Int64
 	opn := snapshotReadFixture(t, 40, nil)
 	pve := inventoryReadFixture(t, 33, nil)
@@ -237,6 +238,11 @@ func TestProviderAPIRequestScopeReusesFreshReadsAndCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := NewAPI(s, auth, nil)
+	return api, &reads, connections
+}
+
+func TestProviderAPIDisplayReusesObservationsAndCloses(t *testing.T) {
+	api, reads, connections := providerDisplayAPIFixture(t)
 	var previous int64
 	for request := int64(1); request <= 2; request++ {
 		r := httptest.NewRequest("GET", "/api/v1/reconciliation", nil)
@@ -247,16 +253,40 @@ func TestProviderAPIRequestScopeReusesFreshReadsAndCloses(t *testing.T) {
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || !out.Inventory.Complete || len(out.Inventory.Containers) != 66 {
 			t.Fatalf("reconciliation failed: HTTP %d", w.Code)
 		}
-		// Inventory reads both hosts, and reconciliation deliberately snapshots
-		// their shared router twice. Reuse connections, never snapshot results.
-		if reads.Load() != request*(2*48+2*250) {
-			t.Fatalf("fresh provider reads skipped: got %d", reads.Load())
+		// Two host inventories and one shared firewall snapshot. A nearby browser
+		// reload reuses these display observations without resetting observedAt.
+		if reads.Load() != 346 {
+			t.Fatalf("display provider reads: want 346 after request %d, got %d", request, reads.Load())
 		}
 		opened := connections.opened.Load()
-		if opened <= previous || opened-previous > 2 {
-			t.Fatalf("request pool was global or not reused: previous=%d now=%d", previous, opened)
+		if (request == 1 && (opened == 0 || opened > 4)) || (request == 2 && opened != previous) {
+			t.Fatalf("display connection count: previous=%d now=%d", previous, opened)
 		}
+		t.Logf("request=%d provider reads=%d connections=%d containers=%d", request, reads.Load(), opened, len(out.Inventory.Containers))
 		previous = opened
 		connections.assertClosed(t)
 	}
+}
+
+func TestProviderAPIMutationReadsStayFreshAfterDisplay(t *testing.T) {
+	api, reads, connections := providerDisplayAPIFixture(t)
+	get := httptest.NewRequest("GET", "/api/v1/reconciliation", nil)
+	get.Header.Set("Authorization", "Bearer fixture-admin")
+	w := httptest.NewRecorder()
+	api.ServeHTTP(w, get)
+	if w.Code != 200 || reads.Load() != 346 {
+		t.Fatal("display observation fixture failed")
+	}
+	// A missing target is rejected only after a fresh complete inventory and
+	// snapshot, even though GET display observations are warm. No writes occur.
+	post := httptest.NewRequest("POST", "/api/v1/plans", strings.NewReader(`{"action":"ensure","hostId":"main","vmid":999}`))
+	post.Header.Set("Authorization", "Bearer fixture-admin")
+	post.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	api.ServeHTTP(w, post)
+	if w.Code != 409 || reads.Load() != 692 {
+		t.Fatalf("plan bypassed fresh reads: HTTP %d provider reads=%d", w.Code, reads.Load())
+	}
+	t.Logf("display reads=346; fresh plan added=%d; total=%d", reads.Load()-346, reads.Load())
+	connections.assertClosed(t)
 }

@@ -28,6 +28,9 @@ type Store struct {
 	state    State
 	lock     *os.File
 	poisoned bool
+	// Process-local observation generation, including uncertain persistence and
+	// mutation attempts. Never persisted or exposed as a settings revision.
+	observationVersion uint64
 }
 
 func OpenStore(dir string, demo bool) (*Store, error) {
@@ -116,9 +119,20 @@ func (s *Store) Close() error {
 }
 func clone[T any](v T) T     { b, _ := json.Marshal(v); var out T; _ = json.Unmarshal(b, &out); return out }
 func (s *Store) Read() State { s.mu.Lock(); defer s.mu.Unlock(); return clone(s.state) }
+func (s *Store) readObservationState() (State, uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return clone(s.state), s.observationVersion, !s.poisoned
+}
+func (s *Store) invalidateObservations() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observationVersion++
+}
 func (s *Store) Update(fn func(*State) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.observationVersion++
 	if s.poisoned {
 		return fmt.Errorf("state persistence uncertain; restart and inspect state")
 	}

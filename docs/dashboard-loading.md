@@ -47,6 +47,25 @@ Refresh generations, activity epochs, caller cancellation and authentication
 attempts prevent superseded responses from changing current state or ending a
 newer session. Unmounting cancels owned reads and clears their deadlines.
 
+## Recent server observations
+
+Authenticated inventory and reconciliation GETs can reuse complete observations
+in server memory for at most 15 seconds from the start of the provider read.
+Cache hits retain the genuine inventory `observedAt`; they do not restart that
+window. Reconciliation reads a shared configured firewall once across its hosts.
+Concurrent GETs join shared work, so cancelling a refresh or reloading the browser
+does not discard a useful read already in progress. Each shared read has a
+90-second deadline and is cancelled and joined when the service closes.
+
+Failed/incomplete observations are not cached as successful results. Settings,
+credentials, provider address/trust, ownership and activity state changes
+invalidate reuse, as do mutation attempts and their completion or failure.
+Pre-mutation in-flight observations cannot become current after that boundary.
+Unfinished-operation guards are read from the current store for each response.
+The next refresh after expiry discovers external provider changes. Preflight,
+plans, applies, recovery and update jobs always perform their existing fresh
+provider checks. There is no browser persistence or automatic write retry.
+
 ## Regression checks
 
 From the repository root, using the installed package manager and dependencies:
