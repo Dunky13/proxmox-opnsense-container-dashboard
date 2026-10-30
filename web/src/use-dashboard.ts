@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Api, messageOf } from './api';
+import { Api, ApiError, messageOf } from './api';
 import {
   jobsSchema,
   operationsSchema,
@@ -13,14 +13,27 @@ import {
 import { activeJob } from './viewmodel';
 import { retainObservations } from './inventory-observations';
 
+export type DashboardRead =
+  'configuration' | 'provider inventory' | 'jobs' | 'operations';
+export type ReadState =
+  'pending' | 'loaded' | 'failed' | 'cancelled' | 'superseded';
+export type DashboardReads = Record<DashboardRead, ReadState>;
+
 export function useDashboard(api: Api) {
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settings, updateSettings] = useState<Settings | null>(null);
+  const settingsRef = useRef<Settings | null>(null);
+  const [inventorySettings, setInventorySettings] = useState<Settings | null>(
+    null,
+  );
   const [data, setData] = useState<Reconciliation | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [operations, setOperations] = useState<Operation[]>([]);
   const [error, setError] = useState('');
   const [activityError, setActivityError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState<DashboardRead[]>([]);
+  const [refreshId, setRefreshId] = useState(0);
+  const [reads, setReads] = useState<DashboardReads | null>(null);
   const [activityLoaded, setActivityLoaded] = useState(false);
   const [inventoryValid, setInventoryValid] = useState(false);
   const observationRevision = useRef<number | null>(null);
@@ -31,66 +44,193 @@ export function useDashboard(api: Api) {
   const refresh = useCallback(async () => {
     if (!alive.current) return;
     const current = ++generation.current;
+    setRefreshId(current);
     const activityVersion = ++activityEpoch.current;
     refreshController.current?.abort();
     const controller = new AbortController();
     refreshController.current = controller;
     setLoading(true);
     setInventoryValid(false);
-    const results = await Promise.allSettled([
-      api.request('/settings', settingsSchema, { signal: controller.signal }),
-      api.request('/reconciliation', reconciliationSchema, {
-        signal: controller.signal,
-      }),
-      api.request('/jobs', jobsSchema, { signal: controller.signal }),
-      api.request('/operations', operationsSchema, {
-        signal: controller.signal,
-      }),
-    ]);
-    if (
-      !alive.current ||
-      current !== generation.current ||
-      controller.signal.aborted
-    )
-      return;
-    const [config, inventory, updates, ops] = results;
-    const errors: string[] = [];
-    if (config.status === 'fulfilled') setSettings(config.value);
-    else
-      errors.push(
-        messageOf(config.reason instanceof Error ? config.reason : null),
-      );
-    if (inventory.status === 'fulfilled') {
-      const retain =
-        config.status === 'fulfilled' &&
-        observationRevision.current === config.value.revision;
-      setData((previous) =>
-        retainObservations(retain ? previous : null, inventory.value),
-      );
-      observationRevision.current =
-        config.status === 'fulfilled' ? config.value.revision : null;
+    setActivityLoaded(false);
+    setError('');
+    setActivityError('');
+    const labels: DashboardRead[] = [
+      'configuration',
+      'provider inventory',
+      'jobs',
+      'operations',
+    ];
+    setPending(labels);
+    setReads({
+      configuration: 'pending',
+      'provider inventory': 'pending',
+      jobs: 'pending',
+      operations: 'pending',
+    });
+    const isCurrent = () =>
+      alive.current &&
+      current === generation.current &&
+      !controller.signal.aborted;
+    let config: Settings | null = null;
+    let inventory: Reconciliation | null = null;
+    let jobsLoaded = false;
+    let operationsLoaded = false;
+    const failures = new Map<string, string>();
+    const activityFailures = new Map<string, string>();
+    function publishInventory() {
+      // Pair only this generation's configuration and inventory. Early settings
+      // may update navigation, but never authorize the previous observation.
+      if (!isCurrent() || !config || !inventory) return;
+      const next = inventory;
+      const retain = observationRevision.current === config.revision;
+      setData((previous) => retainObservations(retain ? previous : null, next));
+      setInventorySettings(config);
+      observationRevision.current = config.revision;
       setInventoryValid(true);
-    } else
-      errors.push(
-        messageOf(inventory.reason instanceof Error ? inventory.reason : null),
-      );
-    if (activityVersion === activityEpoch.current) {
-      if (updates.status === 'fulfilled') setJobs(updates.value);
-      if (ops.status === 'fulfilled') setOperations(ops.value);
     }
-    setActivityLoaded(
-      updates.status === 'fulfilled' && ops.status === 'fulfilled',
-    );
-    const activityFailure =
-      updates.status === 'rejected' || ops.status === 'rejected';
-    setActivityError(
-      activityFailure
-        ? 'Activity could not be refreshed. Previously observed jobs and operations may be stale.'
-        : '',
-    );
-    setError([...new Set(errors)].join(' '));
-    setLoading(false);
+    async function read<T>(
+      label: DashboardRead,
+      request: Promise<T>,
+      apply: (value: T) => void,
+      activity = false,
+    ) {
+      try {
+        const value = await request;
+        if (isCurrent()) {
+          if (activity && activityVersion !== activityEpoch.current)
+            setReads((old) => old && { ...old, [label]: 'superseded' });
+          else {
+            apply(value);
+            setReads((old) => old && { ...old, [label]: 'loaded' });
+          }
+        }
+      } catch (err) {
+        if (!isCurrent()) return;
+        if (activity && activityVersion !== activityEpoch.current) {
+          setReads((old) => old && { ...old, [label]: 'superseded' });
+          return;
+        }
+        setReads((old) => old && { ...old, [label]: 'failed' });
+        const detail = messageOf(err instanceof Error ? err : null);
+        const message =
+          err instanceof ApiError && err.code === 'timeout'
+            ? `${label}: ${detail}`
+            : detail;
+        if (activity) {
+          activityFailures.set(label, message);
+          setActivityError(
+            `${[...activityFailures.values()].join(' ')} Previously observed activity may be stale. Retry refresh before maintenance.`,
+          );
+          setActivityLoaded(false);
+        } else {
+          failures.set(label, message);
+          setError([...failures.values()].join(' '));
+        }
+      } finally {
+        if (isCurrent())
+          setPending((old) => old.filter((item) => item !== label));
+      }
+    }
+    const activityReady = () => {
+      if (
+        activityVersion === activityEpoch.current &&
+        jobsLoaded &&
+        operationsLoaded
+      )
+        setActivityLoaded(true);
+    };
+    await Promise.all([
+      read(
+        'configuration',
+        api.request('/settings', settingsSchema, { signal: controller.signal }),
+        (value) => {
+          if (
+            settingsRef.current &&
+            value.revision < settingsRef.current.revision
+          )
+            throw new ApiError(
+              'Configuration changed. Retry refresh to load the current revision.',
+            );
+          config = value;
+          settingsRef.current = value;
+          updateSettings(value);
+          publishInventory();
+        },
+      ),
+      read(
+        'provider inventory',
+        api.request('/reconciliation', reconciliationSchema, {
+          signal: controller.signal,
+        }),
+        (value) => {
+          inventory = value;
+          publishInventory();
+        },
+      ),
+      read(
+        'jobs',
+        api.request('/jobs', jobsSchema, { signal: controller.signal }),
+        (value) => {
+          setJobs(value);
+          jobsLoaded = true;
+          activityReady();
+        },
+        true,
+      ),
+      read(
+        'operations',
+        api.request('/operations', operationsSchema, {
+          signal: controller.signal,
+        }),
+        (value) => {
+          setOperations(value);
+          operationsLoaded = true;
+          activityReady();
+        },
+        true,
+      ),
+    ]);
+    if (isCurrent()) {
+      refreshController.current = null;
+      setLoading(false);
+    }
   }, [api]);
+  const cancelRefresh = useCallback(() => {
+    generation.current++;
+    activityEpoch.current++;
+    refreshController.current?.abort();
+    refreshController.current = null;
+    setLoading(false);
+    setPending([]);
+    const cancelled = (state: ReadState): ReadState =>
+      state === 'pending' ? 'cancelled' : state;
+    setReads(
+      (old) =>
+        old && {
+          configuration: cancelled(old.configuration),
+          'provider inventory': cancelled(old['provider inventory']),
+          jobs: cancelled(old.jobs),
+          operations: cancelled(old.operations),
+        },
+    );
+    setError(
+      'Refresh cancelled. Completed reads have been kept. Retry refresh for missing data.',
+    );
+  }, []);
+  const setSettings = useCallback((next: Settings) => {
+    // A settings write supersedes any older in-flight read and its readiness.
+    generation.current++;
+    activityEpoch.current++;
+    refreshController.current?.abort();
+    refreshController.current = null;
+    settingsRef.current = next;
+    updateSettings(next);
+    setInventoryValid(false);
+    setActivityLoaded(false);
+    setLoading(false);
+    setPending([]);
+    setReads(null);
+  }, []);
   useEffect(() => {
     alive.current = true;
     void refresh();
@@ -130,10 +270,14 @@ export function useDashboard(api: Api) {
             )
               setOperations(next);
           }
-          if (!controller.signal.aborted) setActivityError('');
         } catch (err) {
-          if (!controller.signal.aborted)
+          if (
+            !controller.signal.aborted &&
+            activityVersion === activityEpoch.current
+          ) {
+            setActivityLoaded(false);
             setActivityError(messageOf(err instanceof Error ? err : null));
+          }
         }
       }
       if (!controller.signal.aborted)
@@ -157,6 +301,7 @@ export function useDashboard(api: Api) {
   return {
     settings,
     setSettings,
+    inventorySettings,
     data,
     jobs,
     operations,
@@ -165,7 +310,11 @@ export function useDashboard(api: Api) {
     activityLoaded,
     inventoryValid,
     loading,
+    pending,
+    refreshId,
+    reads,
     refresh,
+    cancelRefresh,
     addJob,
   };
 }

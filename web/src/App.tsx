@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import {
   Pulse as ActivityIcon,
@@ -19,6 +19,7 @@ import { InventoryView, type ViewMode } from './Inventory';
 import { Activity } from './Activity';
 import { Mismatches } from './Mismatches';
 import { SettingsEditor } from './SettingsEditor';
+import { LoadingToast } from './LoadingToast';
 import { useDashboard } from './use-dashboard';
 import { invalidateObservations } from './inventory-observations';
 import { Badge, Empty, Field, Notice, Skeleton } from './ui';
@@ -35,16 +36,23 @@ export function App() {
   const [error, setError] = useState('');
   const [checking, setChecking] = useState(true);
   const [attempt, setAttempt] = useState(0);
+  const authEpoch = useRef(0);
+  const retryAuthentication = useCallback(() => {
+    authEpoch.current++;
+    setAttempt((old) => old + 1);
+  }, []);
   const unauthenticated = useCallback(() => {
     setAuth((old) => (old ? { ...old, authenticated: false } : old));
     setError(
       'Your session has expired or the token was rejected. Sign in to continue.',
     );
   }, []);
-  const api = useMemo(
-    () => new Api(token, unauthenticated),
-    [token, unauthenticated],
-  );
+  const api = useMemo(() => {
+    const epoch = authEpoch.current;
+    return new Api(token, () => {
+      if (epoch === authEpoch.current) unauthenticated();
+    });
+  }, [token, attempt, unauthenticated]);
   useEffect(() => {
     const controller = new AbortController();
     setChecking(true);
@@ -76,7 +84,7 @@ export function App() {
         old ? { ...old, authenticated: false, principal: '' } : old,
       );
       setError('');
-      setAttempt((old) => old + 1);
+      retryAuthentication();
     } catch (err) {
       setError(messageOf(err instanceof Error ? err : null));
     }
@@ -98,9 +106,9 @@ export function App() {
         error={error}
         onToken={(value) => {
           setToken(value);
-          setAttempt((old) => old + 1);
+          retryAuthentication();
         }}
-        onRetry={() => setAttempt((old) => old + 1)}
+        onRetry={retryAuthentication}
       />
     );
   return (
@@ -232,6 +240,7 @@ function Dashboard({
   const [mode, setMode] = useState<ViewMode>(initialView);
   const [selected, setSelected] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const refreshButton = useRef<HTMLButtonElement | null>(null);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30000);
@@ -242,18 +251,29 @@ function Dashboard({
     (!Number.isFinite(Date.parse(observedData.inventory.observedAt)) ||
       now - Date.parse(observedData.inventory.observedAt) > 5 * 60 * 1000);
   const data = useMemo(() => {
-    if (!observedData || (dashboard.inventoryValid && !stale))
-      return observedData;
-    return invalidateObservations(
-      observedData,
-      stale
-        ? 'Inventory expired. Refresh to verify current provider state.'
-        : 'Inventory refresh is pending or failed. Previous observations are display only.',
-    );
-  }, [observedData, dashboard.inventoryValid, stale]);
+    if (!observedData) return observedData;
+    const observed =
+      dashboard.inventoryValid && !stale
+        ? observedData
+        : invalidateObservations(
+            observedData,
+            stale
+              ? 'Inventory expired. Refresh to verify current provider state.'
+              : 'Inventory refresh is pending or failed. Previous observations are display only.',
+          );
+    // Either read can observe unfinished work the other has not seen yet.
+    // Preserve every known guard until a fresh refresh observes completion.
+    return {
+      ...observed,
+      operations: [...observed.operations, ...operations],
+    };
+  }, [observedData, dashboard.inventoryValid, stale, operations]);
   const views = useMemo(
-    () => (settings && data ? containerViews(data, settings) : []),
-    [data, settings],
+    () =>
+      dashboard.inventorySettings && data
+        ? containerViews(data, dashboard.inventorySettings)
+        : [],
+    [data, dashboard.inventorySettings],
   );
   function navigate(next: Page) {
     setPage(next);
@@ -453,19 +473,22 @@ function Dashboard({
               )
             ) : (
               <span className="muted">
-                Next VMID: loading configured hosts…
+                {loading
+                  ? 'Next VMID: loading configured hosts…'
+                  : 'Next VMID: configuration unavailable'}
               </span>
             )}
           </div>
           <button
             className="button"
-            disabled={loading}
+            ref={refreshButton}
             onClick={() => {
-              void refresh();
+              if (loading) dashboard.cancelRefresh();
+              else void refresh();
             }}
           >
             <ArrowClockwise className={loading ? 'refreshing' : ''} size={17} />
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? 'Cancel refresh' : 'Refresh'}
           </button>
         </header>
         {auth.demo && (
@@ -481,7 +504,7 @@ function Dashboard({
           {(error || authError) && (
             <Notice tone="danger" role="alert">
               {error || authError}
-              {data && (
+              {data && !dashboard.inventoryValid && (
                 <p>
                   Showing previously observed data from{' '}
                   {formatTime(data.inventory.observedAt)}. Treat values as stale
@@ -490,7 +513,6 @@ function Dashboard({
               )}
               <button
                 className="button"
-                disabled={loading}
                 onClick={() => {
                   void refresh();
                 }}
@@ -516,10 +538,14 @@ function Dashboard({
               unavailable. Refresh to check current provider state.
             </Notice>
           )}
-          {loading && !data && page !== 'settings' && <Skeleton />}
+          {loading &&
+            ((!data && (page === 'containers' || page === 'mismatches')) ||
+              (!settings && page === 'settings')) && <Skeleton />}
           {!loading &&
             (!settings || !data) &&
-            (page === 'containers' || page === 'mismatches') && (
+            (page === 'containers' ||
+              page === 'mismatches' ||
+              (!settings && page === 'settings')) && (
               <Empty title="Dashboard data unavailable">
                 <p>
                   The server could not provide valid configuration and
@@ -535,13 +561,13 @@ function Dashboard({
                 </button>
               </Empty>
             )}
-          {settings && data && (
+          {dashboard.inventorySettings && data && (
             <>
               <div hidden={page !== 'containers'}>
                 <InventoryView
                   api={api}
-                  settings={settings}
-                  data={{ ...data, operations }}
+                  settings={dashboard.inventorySettings}
+                  data={data}
                   views={views}
                   filters={filters}
                   setFilters={setFilters}
@@ -562,8 +588,8 @@ function Dashboard({
               <div hidden={page !== 'mismatches'}>
                 <Mismatches
                   api={api}
-                  settings={settings}
-                  data={{ ...data, operations }}
+                  settings={dashboard.inventorySettings}
+                  data={data}
                   onInspect={(key) => {
                     setSelected(key);
                     navigate('containers');
@@ -597,6 +623,13 @@ function Dashboard({
             </div>
           )}
         </main>
+        <LoadingToast
+          refreshId={dashboard.refreshId}
+          reads={dashboard.reads}
+          onDismiss={() =>
+            refreshButton.current?.focus({ preventScroll: true })
+          }
+        />
       </div>
     </div>
   );

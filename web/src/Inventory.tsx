@@ -13,6 +13,7 @@ import {
 import { Api } from './api';
 import type { Job, Reconciliation, Settings } from './schemas';
 import { ContainerDetail } from './ContainerDetail';
+import { ContainerIssues } from './ContainerIssues';
 import { AppIcon, Badge, Empty, Field, Notice, Status } from './ui';
 import {
   filterViews,
@@ -486,6 +487,7 @@ function ContainerRecord({
         )}
         <Status value={view.item?.state ?? 'unknown'} />
       </div>
+      <ContainerIssues view={view} />
       {mode === 'cards' && (
         <div className="record-maintenance">
           {maintenance.map(({ kind, reason, label }) => {
