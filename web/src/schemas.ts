@@ -194,6 +194,9 @@ export const maintenanceSchema = z.object({
 });
 export type MaintenanceReadiness = z.infer<typeof maintenanceSchema>;
 export const itemSchema = z.object({
+  cleanupSelectable: z.boolean().optional(),
+  canAddReservation: z.boolean().optional(),
+  reservationBlocked: text.optional(),
   drift: z.array(driftSchema).optional(),
   managedResources: z.array(existingResourceSchema).optional(),
   canAcceptChanges: z.boolean().optional(),

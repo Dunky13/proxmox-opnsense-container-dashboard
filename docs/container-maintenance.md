@@ -295,3 +295,29 @@ Go/demo/API/browser checks are separate from live provider acceptance; parent mu
 review the combined source, confirm current restricted SSH capability,
 publish/deploy, and verify
 the intended maintenance flow against fresh live evidence.
+
+
+## Review and recovery boundaries
+
+Owned and external reservation cleanup both bind the complete snapshots of other
+configured firewalls during review. They recheck retained upstream references
+before every deletion, service application and recovery, including after the
+selected reservation row has disappeared. Missing provider readiness blocks the
+first delete, not only service application. A cleanup selection may retain a
+protected reservation while deleting an independent verified owned proxy group;
+the backend checks dependencies against the selected UUIDs.
+
+Reservation-only repair checks reservation IP/MAC collisions independently of
+unowned proxy domains. It can create a missing reservation beside an existing
+manual proxy without changing or adopting that proxy. Current container and
+reservation collision checks and provider readiness repeat immediately before
+KEA application and during recovery. Action-specific eligibility never permits
+stale inventory or incomplete operations to authorize a repair.
+
+An external cleanup journal retains its original policy hash separately from
+credential material and configuration revision. Credential or CA repairs allowed
+by Settings do not change that policy. A newly reviewed recovery plan binds the
+current full configuration and credentials, while policy/ownership changes still
+block recovery. Legacy journals without a policy hash retain their stricter full
+configuration binding. Maintenance capability observations expire on their own
+60-second deadline, without waiting for an unrelated dashboard render.

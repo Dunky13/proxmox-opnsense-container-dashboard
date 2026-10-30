@@ -30,6 +30,7 @@ type ExternalCleanupJournal struct {
 	Review        ExternalCleanupReview `json:"review"`
 	Baseline      ProviderSnapshot      `json:"baseline"`
 	ConfigHash    string                `json:"configHash"`
+	PolicyHash    string                `json:"policyHash,omitempty"`
 	OwnershipHash string                `json:"ownershipHash"`
 	Deleted       map[string]bool       `json:"deleted"`
 	CaddyApplied  bool                  `json:"caddyApplied"`
@@ -335,7 +336,7 @@ func externalPlanBlocked(st State, routerID string, review *ExternalCleanupRevie
 // Reconcile only the originally selected deletions against complete original
 // evidence. Any new/changed retained record (including foreign refs) blocks.
 func inspectExternalJournal(st State, inv Inventory, snap ProviderSnapshot, j ExternalCleanupJournal) (ExternalCleanupJournal, error) {
-	if j.ConfigHash != fingerprint(st.Config) || j.OwnershipHash != fingerprint(st.Owned) {
+	if (j.PolicyHash != "" && j.PolicyHash != configPolicy(st.Config)) || (j.PolicyHash == "" && j.ConfigHash != fingerprint(st.Config)) || j.OwnershipHash != fingerprint(st.Owned) {
 		return j, conflict("cleanup configuration or ownership changed; preserve journal for inspection")
 	}
 	if err := externalAbsent(st, inv, j.Review.Address); err != nil {
@@ -416,7 +417,7 @@ func (s *Service) externalCleanupPlan(ctx context.Context, st State, req PlanReq
 		if err != nil {
 			return Plan{}, err
 		}
-		j = ExternalCleanupJournal{Review: ExternalCleanupReview{Address: a, Targets: importRefs(rows), ContextHash: fingerprint(snap), ExternalUseAcknowledged: true}, Baseline: clone(snap), ConfigHash: fingerprint(st.Config), OwnershipHash: fingerprint(st.Owned), Deleted: map[string]bool{}}
+		j = ExternalCleanupJournal{Review: ExternalCleanupReview{Address: a, Targets: importRefs(rows), ContextHash: fingerprint(snap), ExternalUseAcknowledged: true}, Baseline: clone(snap), ConfigHash: fingerprint(st.Config), PolicyHash: configPolicy(st.Config), OwnershipHash: fingerprint(st.Owned), Deleted: map[string]bool{}}
 	}
 	foreignHash, err := s.externalForeignContext(ctx, st.Config, o, j.Review)
 	if err != nil {
@@ -479,7 +480,7 @@ func (s *Service) applyExternalCleanup(ctx context.Context, st State, p Plan, h 
 		if fingerprint(review) != fingerprint(p.ExternalCleanup) {
 			return Operation{}, conflict("external cleanup bindings changed")
 		}
-		j = ExternalCleanupJournal{Review: review, Baseline: clone(snap), ConfigHash: p.ConfigHash, OwnershipHash: p.OwnershipHash, Deleted: map[string]bool{}}
+		j = ExternalCleanupJournal{Review: review, Baseline: clone(snap), ConfigHash: p.ConfigHash, PolicyHash: configPolicy(st.Config), OwnershipHash: p.OwnershipHash, Deleted: map[string]bool{}}
 	}
 	if fingerprint(j.Review.Address) != p.Identity || fingerprint(j.Review.Targets) != fingerprint(p.ExternalCleanup.Targets) {
 		return Operation{}, conflict("external selection identity changed")
@@ -597,6 +598,13 @@ func (s *Service) externalForeignContext(ctx context.Context, cfg Config, router
 	if !reservation {
 		return "", nil
 	}
+	return s.reservationForeignContext(ctx, cfg, router, []string{review.Address.IP})
+}
+
+func (s *Service) reservationForeignContext(ctx context.Context, cfg Config, router OPNsense, ips []string) (string, error) {
+	if len(ips) == 0 {
+		return "", nil
+	}
 	hashes := map[string]string{}
 	for _, other := range cfg.OPNsenses {
 		if other.ID == router.ID {
@@ -607,8 +615,10 @@ func (s *Service) externalForeignContext(ctx context.Context, cfg Config, router
 			return "", conflict("complete proxy inventory is required on configured firewall " + other.ID + " before releasing the reservation")
 		}
 		for _, r := range snap.Resources {
-			if r.Kind == "handle" && strings.Contains(r.Fields["ToDomain"], review.Address.IP) {
-				return "", conflict("retained proxy handle " + r.ID + " on configured firewall " + other.ID + " still references the reservation IP; clean that proxy separately first")
+			for _, ip := range ips {
+				if r.Kind == "handle" && strings.Contains(r.Fields["ToDomain"], ip) {
+					return "", conflict("retained proxy handle " + r.ID + " on configured firewall " + other.ID + " still references the reservation IP; clean that proxy separately first")
+				}
 			}
 		}
 		hashes[other.ID] = fingerprint(snap)

@@ -6,22 +6,25 @@ import (
 )
 
 type ReconcileItem struct {
-	ManagedResources  []ExistingResource `json:"managedResources,omitempty"`
-	Drift             []ResourceDrift    `json:"drift,omitempty"`
-	CanAcceptChanges  bool               `json:"canAcceptChanges,omitempty"`
-	AcceptBlocked     string             `json:"acceptBlocked,omitempty"`
-	ImportAvailable   bool               `json:"importAvailable,omitempty"`
-	ImportIssues      []string           `json:"importIssues,omitempty"`
-	ExistingRoute     *RouteConfig       `json:"existingRoute,omitempty"`
-	ExistingResources []ExistingResource `json:"existingResources,omitempty"`
-	ResolvedSubnet    *SubnetReference   `json:"resolvedSubnet,omitempty"`
-	PrivateAccessList *AccessList        `json:"privateAccessList,omitempty"`
-	Key               string             `json:"key"`
-	State             string             `json:"state"`
-	Issues            []string           `json:"issues"`
-	Owned             bool               `json:"owned"`
-	DesiredRoute      *RouteConfig       `json:"desiredRoute,omitempty"`
-	RouteUnavailable  bool               `json:"routeUnavailable,omitempty"`
+	CleanupSelectable  bool               `json:"cleanupSelectable,omitempty"`
+	CanAddReservation  bool               `json:"canAddReservation,omitempty"`
+	ReservationBlocked string             `json:"reservationBlocked,omitempty"`
+	ManagedResources   []ExistingResource `json:"managedResources,omitempty"`
+	Drift              []ResourceDrift    `json:"drift,omitempty"`
+	CanAcceptChanges   bool               `json:"canAcceptChanges,omitempty"`
+	AcceptBlocked      string             `json:"acceptBlocked,omitempty"`
+	ImportAvailable    bool               `json:"importAvailable,omitempty"`
+	ImportIssues       []string           `json:"importIssues,omitempty"`
+	ExistingRoute      *RouteConfig       `json:"existingRoute,omitempty"`
+	ExistingResources  []ExistingResource `json:"existingResources,omitempty"`
+	ResolvedSubnet     *SubnetReference   `json:"resolvedSubnet,omitempty"`
+	PrivateAccessList  *AccessList        `json:"privateAccessList,omitempty"`
+	Key                string             `json:"key"`
+	State              string             `json:"state"`
+	Issues             []string           `json:"issues"`
+	Owned              bool               `json:"owned"`
+	DesiredRoute       *RouteConfig       `json:"desiredRoute,omitempty"`
+	RouteUnavailable   bool               `json:"routeUnavailable,omitempty"`
 }
 type Reconciliation struct {
 	ProtectedCandidates []ProtectedCandidate `json:"protectedCandidates,omitempty"`
@@ -210,6 +213,13 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 				item.Issues = append(item.Issues, candidate.Issues...)
 			}
 		}
+		if inv.Complete && !failures[h.ID] && snapshots[h.ID].Ready {
+			_, _, _, _, err := reservationTarget(st, h, o, c.VMID, inv, snapshots[h.ID])
+			item.CanAddReservation = err == nil
+			if err != nil {
+				item.ReservationBlocked = err.Error()
+			}
+		}
 		for _, op := range out.Operations {
 			if op.Key == c.Key && op.Status != "succeeded" {
 				item.State = "mismatch"
@@ -246,6 +256,8 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 		} else if _, e = existingOwnedResources(own, snapshots[own.HostID]); e != nil {
 			item.State = "mismatch"
 			item.Issues = append(item.Issues, "owned provider resources changed")
+		} else if !snapshots[own.HostID].Ready {
+			item.Issues = append(item.Issues, "provider prerequisites unavailable")
 		} else if e = cleanupDeletionReferences(own, snapshots[own.HostID]); e != nil {
 			item.State = "conflict"
 			item.Issues = append(item.Issues, "unrelated configuration references owned resources")
@@ -255,6 +267,10 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 		} else {
 			item.State = "ownedOrphan"
 			item.Issues = append(item.Issues, "fully observed inventory has no matching VMID; cleanup requires explicit plan")
+		}
+		if inv.Complete && !failures[own.HostID] && snapshots[own.HostID].Ready && cleanupSafe(inv, own) == nil {
+			_, err := existingOwnedResources(own, snapshots[own.HostID])
+			item.CleanupSelectable = err == nil
 		}
 		out.Items = append(out.Items, item)
 	}

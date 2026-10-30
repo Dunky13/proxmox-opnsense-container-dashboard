@@ -487,6 +487,15 @@ export function ContainerDetail({
     }
   }, [jobToConfirm]);
   const block = ensureBlocked(view, data);
+  const reservationView: ContainerView = view.item?.canAddReservation
+    ? { ...view, item: { ...view.item, state: 'missing' } }
+    : view;
+  const reservationBlock = view.stale
+    ? 'Refresh current inventory before repairing a reservation.'
+    : ensureBlocked(reservationView, data) ||
+      (view.item?.canAddReservation === false
+        ? view.item.reservationBlocked || 'Reservation repair is unavailable.'
+        : '');
   const importBlock = importBlocked(
     view,
     data,
@@ -512,7 +521,12 @@ export function ContainerDetail({
   async function review(
     action: 'ensure' | 'import' | 'accept' | 'reservation' = 'ensure',
   ) {
-    if (preparing.current || plan || (action === 'import' && importBlock))
+    if (
+      preparing.current ||
+      plan ||
+      (action === 'import' && importBlock) ||
+      (action === 'reservation' && reservationBlock)
+    )
       return;
     preparing.current = true;
     const observation = data;
@@ -635,6 +649,18 @@ export function ContainerDetail({
   }
   const [readiness, setReadiness] = useState<MaintenanceReadiness | null>(null);
   const [checkingMaintenance, setCheckingMaintenance] = useState(false);
+  useEffect(() => {
+    if (!readiness) return;
+    const remaining = Date.parse(readiness.observedAt) + 60000 - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      setReadiness(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setReadiness((current) => (current === readiness ? null : current));
+    }, remaining);
+    return () => clearTimeout(timer);
+  }, [readiness]);
   const currentReadiness =
     readiness?.identity === c.identity &&
     readiness.fingerprint === c.fingerprint &&
@@ -970,7 +996,9 @@ export function ContainerDetail({
                   !data.inventory.complete ||
                   planObservation.current !== data
                 ? 'Observations changed after review. Close this plan and review refreshed state.'
-                : block
+                : plan.action === 'reservation'
+                  ? reservationBlock
+                  : block
           }
           onDone={async () => {
             if (plan.action === 'import') {
@@ -994,7 +1022,8 @@ export function ContainerDetail({
         <div className="actions">
           <button
             className="button"
-            disabled={networkBusy || !!block}
+            disabled={networkBusy || !!reservationBlock}
+            title={reservationBlock || undefined}
             onClick={() => {
               void review('reservation');
             }}

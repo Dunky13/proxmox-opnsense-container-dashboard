@@ -318,6 +318,7 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 		return Plan{}, e
 	}
 	identity := ""
+	cleanupForeignHash := ""
 	if req.Action == "cleanup" {
 		if !owned || len(own.Resources) == 0 {
 			return Plan{}, conflict("no dashboard-owned resources")
@@ -339,6 +340,10 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 			return Plan{}, e
 		}
 		if e = cleanupTargetConflicts(inv, own, snap); e != nil {
+			return Plan{}, e
+		}
+		cleanupForeignHash, e = s.cleanupForeignContext(ctx, st.Config, o, own, snap)
+		if e != nil {
 			return Plan{}, e
 		}
 		identity = own.Identity
@@ -392,7 +397,7 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 	if e != nil {
 		return Plan{}, e
 	}
-	p := Plan{ResourceIDs: req.ResourceIDs, ID: newID(), Action: req.Action, Key: key(h.ID, req.VMID), HostID: h.ID, VMID: req.VMID, OPNsenseID: o.ID, Public: route.Public, DesiredRoute: route, Effects: effects, ApplyNotes: notes, Revision: st.Config.Revision, InventoryHash: inv.StableHash(), ProviderHash: fingerprint(snap), Identity: identity, CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute), RouteLayout: own.RouteLayout, OwnershipHash: fingerprint(st.Owned), ConfigHash: fingerprint(st.Config)}
+	p := Plan{CleanupForeignContextHash: cleanupForeignHash, ResourceIDs: req.ResourceIDs, ID: newID(), Action: req.Action, Key: key(h.ID, req.VMID), HostID: h.ID, VMID: req.VMID, OPNsenseID: o.ID, Public: route.Public, DesiredRoute: route, Effects: effects, ApplyNotes: notes, Revision: st.Config.Revision, InventoryHash: inv.StableHash(), ProviderHash: fingerprint(snap), Identity: identity, CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute), RouteLayout: own.RouteLayout, OwnershipHash: fingerprint(st.Owned), ConfigHash: fingerprint(st.Config)}
 	if req.Action == "ensure" {
 		c, _ := inv.Find(p.Key)
 		p.ResolvedSubnet, e = resolveSubnet(snap, h, c)
@@ -564,6 +569,13 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		if e = cleanupTargetConflicts(inv, selection, snap); e != nil {
 			return Operation{}, e
 		}
+		foreignHash, err := s.cleanupForeignContext(ctx, st.Config, o, selection, snap)
+		if err != nil {
+			return Operation{}, err
+		}
+		if foreignHash != plan.CleanupForeignContextHash {
+			return Operation{}, conflict("other configured firewall context changed since cleanup review")
+		}
 	} else {
 		c, e := ensureContainer(inv, h, plan.VMID)
 		if e != nil {
@@ -577,7 +589,7 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		}
 	}
 	now := time.Now().UTC()
-	op := Operation{ResourceIDs: plan.ResourceIDs, ID: newID(), PlanID: plan.ID, Key: plan.Key, OPNsenseID: o.ID, Action: plan.Action, Status: "running", Step: "starting", CreatedAt: now, UpdatedAt: now, Resources: []OwnedResource{}}
+	op := Operation{CleanupForeignContextHash: plan.CleanupForeignContextHash, ResourceIDs: plan.ResourceIDs, ID: newID(), PlanID: plan.ID, Key: plan.Key, OPNsenseID: o.ID, Action: plan.Action, Status: "running", Step: "starting", CreatedAt: now, UpdatedAt: now, Resources: []OwnedResource{}}
 	if plan.Action == "ensure" {
 		container, _ := inv.Find(plan.Key)
 		op.ContainerFingerprint = container.Fingerprint
@@ -966,7 +978,7 @@ func (w *workflow) cleanup() error {
 			if e = checkedSnapshot(latest); e != nil {
 				return e
 			}
-			if e = w.externalGuard(latestInventory, latest); e != nil {
+			if e = w.cleanupGuard(latestInventory, latest, selection); e != nil {
 				return e
 			}
 			if e = verifyCleanedTargets(*w.own, w.op.CleanupTargets, latest); e != nil {
@@ -1042,7 +1054,7 @@ func (w *workflow) applyCleanupService(service string, selection Ownership) erro
 	if !snap.Ready {
 		return conflict("provider prerequisites unavailable")
 	}
-	if e = w.externalGuard(inv, snap); e != nil {
+	if e = w.cleanupGuard(inv, snap, selection); e != nil {
 		return e
 	}
 	if e = verifyCleanedTargets(*w.own, w.op.CleanupTargets, snap); e != nil {
@@ -1220,6 +1232,13 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 			}
 			if e = cleanupTargetConflicts(inv, targets, snap); e != nil {
 				return op, e
+			}
+			foreignHash, err := s.cleanupForeignContext(ctx, st.Config, o, targets, snap)
+			if err != nil {
+				return op, err
+			}
+			if op.CleanupForeignContextHash != "" && foreignHash != op.CleanupForeignContextHash {
+				return op, conflict("other configured firewall context changed before cleanup recovery")
 			}
 		}
 		if e = s.Providers.Apply(ctx, o, service); e != nil {

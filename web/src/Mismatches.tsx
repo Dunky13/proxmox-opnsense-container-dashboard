@@ -135,7 +135,7 @@ export function Mismatches({
             (op) => op.key === item.key && op.status !== 'succeeded',
           );
           const canCleanup =
-            item.state === 'ownedOrphan' &&
+            (item.state === 'ownedOrphan' || item.cleanupSelectable === true) &&
             item.owned &&
             data.inventory.complete &&
             !unfinished;

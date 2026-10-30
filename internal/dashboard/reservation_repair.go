@@ -63,7 +63,7 @@ func reservationTarget(st State, h Host, o OPNsense, vmid int, inv Inventory, sn
 	if err = targetConflicts(inv, c, desired); err != nil {
 		return c, own, nil, nil, err
 	}
-	if err = checkConflicts(snap, own, desired); err != nil {
+	if err = reservationConflicts(snap, own, desired); err != nil {
 		return c, own, nil, nil, err
 	}
 	if err = checkedSnapshot(snap); err != nil {
@@ -179,6 +179,19 @@ func (s *Service) verifyReservationApplication(ctx context.Context, h Host, o OP
 		return err
 	}
 	if err = checkedSnapshot(snap); err != nil {
+		return err
+	}
+	if !snap.Ready {
+		return conflict("provider prerequisites unavailable before KEA application")
+	}
+	desired, err := desiredFields(o, fresh, h, false)
+	if err != nil {
+		return err
+	}
+	if err = targetConflicts(inv, fresh, desired); err != nil {
+		return err
+	}
+	if err = reservationConflicts(snap, own, desired); err != nil {
 		return err
 	}
 	if _, err = existingOwnedResources(own, snap); err != nil {

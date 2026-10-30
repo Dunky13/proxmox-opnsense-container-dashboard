@@ -241,3 +241,15 @@ Apply continues that operation journal and preserves all reviewed plan IDs.
 Reappeared deleted UUIDs, changed resources/retained context and unsafe occupancy
 remain blocked. Lost responses and restarts never trigger automatic mutation or
 generic owned recovery; failed recovery cannot mark success.
+
+
+Reconciliation includes action-specific `canAddReservation` and
+`reservationBlocked` observations. An existing unowned proxy does not by itself
+block reservation-only creation; all reservation collisions and current target
+checks remain enforced by that action. `cleanupSelectable` permits review of a
+verified absent app's resource subsets even when whole-app cleanup has a retained
+reference. It grants no deletion authority: the plan and every write validate the
+exact selection. Owned reservation cleanup binds other-firewall context through
+`cleanupForeignContextHash`, rechecking references at deletion, application and
+recovery. External recovery retains its original policy binding while each new
+review binds the current full configuration after any allowed credential repair.

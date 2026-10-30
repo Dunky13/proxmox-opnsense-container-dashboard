@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
@@ -397,4 +397,120 @@ it('withdraws cleanup confirmation when current observations change', async () =
     screen.getByRole('button', { name: 'Delete listed owned resources' }),
   ).toBeDisabled();
   expect(screen.getByText(/Observations changed after review/)).toBeVisible();
+});
+
+it('review regression: allows reservation-only review beside an existing unowned proxy', async () => {
+  const requests = fixtureApi((path) =>
+    path === '/reconciliation'
+      ? Response.json({
+          ...reconciliation,
+          items: [
+            {
+              key: container.key,
+              state: 'conflict',
+              owned: false,
+              issues: ['unowned Caddy domain matches this app'],
+              canAddReservation: true,
+            },
+          ],
+        })
+      : path === '/plans'
+        ? Response.json({
+            ...plan,
+            action: 'reservation',
+            desiredRoute: { scheme: '', port: 0, public: false },
+          })
+        : undefined,
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(
+    await screen.findByRole('button', { name: 'Configure immich, VMID 604' }),
+  );
+  const button = screen.getByRole('button', {
+    name: 'Add missing reservation',
+  });
+  expect(button).toBeEnabled();
+  await user.click(button);
+  await waitFor(() =>
+    expect(requests).toHaveBeenCalledWith(
+      '/api/v1/plans',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"action":"reservation"'),
+      }),
+    ),
+  );
+});
+
+it('review regression: exposes independent orphan selection despite a whole-app dependency', async () => {
+  fixtureApi(() => undefined);
+  const data = reconciliationSchema.parse({
+    ...reconciliation,
+    items: [
+      {
+        key: 'main:609',
+        state: 'conflict',
+        owned: true,
+        cleanupSelectable: true,
+        issues: ['a retained foreign proxy references the reservation'],
+        managedResources: [
+          {
+            id: resourceId,
+            kind: 'handle',
+            name: 'independent proxy',
+            summary: 'Verified owned proxy',
+          },
+        ],
+      },
+    ],
+  });
+  render(
+    <Mismatches
+      api={new Api('', vi.fn())}
+      data={data}
+      settings={settings}
+      onInspect={vi.fn()}
+      onRefresh={async () => {}}
+      onActivity={vi.fn()}
+    />,
+  );
+  expect(
+    screen.getByRole('checkbox', { name: /Remove stale proxy/ }),
+  ).toBeEnabled();
+});
+
+it('review regression: removes expired maintenance readiness without an unrelated render', async () => {
+  fixtureApi((path) =>
+    path.endsWith('/maintenance')
+      ? Response.json({
+          key: container.key,
+          identity: container.identity,
+          fingerprint: container.fingerprint,
+          observedAt: new Date(Date.now() - 59500).toISOString(),
+          connected: true,
+          distribution: 'debian',
+          version: '13',
+          source: 'ssh',
+          appUpdate: true,
+          osUpdate: true,
+          reason: '',
+          appReason: '',
+          osReason: '',
+        })
+      : undefined,
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(
+    await screen.findByRole('button', { name: 'Configure immich, VMID 604' }),
+  );
+  await user.click(
+    screen.getByRole('button', { name: 'Check maintenance readiness' }),
+  );
+  expect(await screen.findByText(/SSH connected/)).toBeVisible();
+  await waitFor(
+    () => expect(screen.queryByText(/SSH connected/)).not.toBeInTheDocument(),
+    { timeout: 1800 },
+  );
 });
