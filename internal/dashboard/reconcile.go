@@ -200,7 +200,7 @@ func (s *Service) Reconcile(ctx context.Context) Reconciliation {
 		} else if _, e = existingOwnedResources(own, snapshots[own.HostID]); e != nil {
 			item.State = "mismatch"
 			item.Issues = append(item.Issues, "owned provider resources changed")
-		} else if e = cleanupReferences(own, snapshots[own.HostID]); e != nil {
+		} else if e = cleanupDeletionReferences(own, snapshots[own.HostID]); e != nil {
 			item.State = "conflict"
 			item.Issues = append(item.Issues, "unrelated configuration references owned resources")
 		} else {

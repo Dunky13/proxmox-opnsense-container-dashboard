@@ -266,7 +266,7 @@ func (s *Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 		if _, e = existingOwnedResources(own, snap); e != nil {
 			return Plan{}, e
 		}
-		if e = cleanupReferences(own, snap); e != nil {
+		if e = cleanupDeletionReferences(own, snap); e != nil {
 			return Plan{}, e
 		}
 		identity = own.Identity
@@ -359,13 +359,6 @@ func cleanupReferences(own Ownership, snap ProviderSnapshot) error {
 	ids := map[string]bool{}
 	for _, r := range own.Resources {
 		ids[r.ID] = true
-		if _, exists := snap.Find(r.ID, "acl"); r.Kind == "acl" && exists {
-			general, present := snap.Find("general", "caddyGeneral")
-			trustedID, observed := general.Fields["accesslist"]
-			if !present || !observed || (trustedID != "" && !uuidPattern.MatchString(trustedID)) {
-				return conflict("global trusted proxy selection must be verified before deleting an owned access list")
-			}
-		}
 	}
 	for _, r := range snap.Resources {
 		if ids[r.ID] {
@@ -374,6 +367,21 @@ func cleanupReferences(own Ownership, snap ProviderSnapshot) error {
 		for _, k := range []string{"reverse", "accesslist", "subdomain"} {
 			if ids[r.Fields[k]] {
 				return conflict("an unrelated resource references owned configuration")
+			}
+		}
+	}
+	return nil
+}
+func cleanupDeletionReferences(own Ownership, snap ProviderSnapshot) error {
+	if err := cleanupReferences(own, snap); err != nil {
+		return err
+	}
+	for _, r := range own.Resources {
+		if _, exists := snap.Find(r.ID, "acl"); r.Kind == "acl" && exists {
+			general, present := snap.Find("general", "caddyGeneral")
+			trustedID, observed := general.Fields["accesslist"]
+			if !present || !observed || (trustedID != "" && !uuidPattern.MatchString(trustedID)) {
+				return conflict("global trusted proxy selection must be verified before deleting an owned access list")
 			}
 		}
 	}
@@ -446,7 +454,7 @@ func (s *Service) ApplyPlan(ctx context.Context, id string) (Operation, error) {
 		if e = checkOwned(own, snap); e != nil {
 			return Operation{}, e
 		}
-		if e = cleanupReferences(own, snap); e != nil {
+		if e = cleanupDeletionReferences(own, snap); e != nil {
 			return Operation{}, e
 		}
 	} else {
@@ -775,7 +783,7 @@ func (w *workflow) cleanup() error {
 			if e = checkOwned(*w.own, latest); e != nil {
 				return e
 			}
-			if e = cleanupReferences(*w.own, latest); e != nil {
+			if e = cleanupDeletionReferences(*w.own, latest); e != nil {
 				return e
 			}
 			w.snap = latest
@@ -902,7 +910,7 @@ func (s *Service) Recover(ctx context.Context, id string) (Operation, error) {
 			if !desiredResourcesMatch(o, h, c, own, snap, own.Public) {
 				return op, conflict("recorded route differs from current desired configuration")
 			}
-		} else if e = cleanupReferences(own, snap); e != nil {
+		} else if e = cleanupDeletionReferences(own, snap); e != nil {
 			return op, e
 		}
 		if e = s.Providers.Apply(ctx, o, service); e != nil {

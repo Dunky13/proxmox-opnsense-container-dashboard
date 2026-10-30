@@ -106,3 +106,41 @@ func TestUnknownGlobalTrustDoesNotBlockCleanupWithoutAnACLToDelete(t *testing.T)
 		})
 	}
 }
+
+func TestUnknownGlobalTrustDoesNotBlockReservationRepair(t *testing.T) {
+	for _, mode := range []string{"missing", "malformed"} {
+		t.Run(mode, func(t *testing.T) {
+			s, p, store := demoService(t)
+			ensureDemo(t, s)
+			own := store.Read().Owned["main:604"]
+			acl, _ := ownedByKind(own, "acl")
+			reservation, _ := ownedByKind(own, "reservation")
+			o := store.Read().Config.OPNsenses[0]
+			snap, err := p.Snapshot(context.Background(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, _ := snap.Find(reservation.ID, "reservation")
+			if err = p.DemoProviders.Delete(context.Background(), o, r); err != nil {
+				t.Fatal(err)
+			}
+			s.Providers = &unreadableTrustProvider{probeProviders: p, mask: true, invalid: mode == "malformed"}
+			plan, err := s.Plan(context.Background(), PlanRequest{Action: "ensure", HostID: "main", VMID: 604})
+			if err != nil {
+				t.Fatal("reservation repair blocked by unrelated global trust", err)
+			}
+			if _, err = s.ApplyPlan(context.Background(), plan.ID); err != nil {
+				t.Fatal(err)
+			}
+			current := store.Read().Owned[own.Key]
+			repaired, ok := ownedByKind(current, "reservation")
+			if !ok || repaired.ID == reservation.ID {
+				t.Fatal("reservation was not recreated")
+			}
+			retained, ok := ownedByKind(current, "acl")
+			if !ok || retained != acl {
+				t.Fatal("unrelated ACL changed", retained)
+			}
+		})
+	}
+}
