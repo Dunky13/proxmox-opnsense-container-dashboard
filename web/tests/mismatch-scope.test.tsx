@@ -9,7 +9,12 @@ import {
   type Reconciliation,
   type ReconcileItem,
 } from '../src/schemas';
-import { mismatchCounts, reviewScope } from '../src/viewmodel';
+import {
+  eligibleProtected,
+  informationalProtected,
+  mismatchCounts,
+  reviewScope,
+} from '../src/viewmodel';
 import {
   auth,
   job,
@@ -33,7 +38,24 @@ const mixed: Reconciliation = {
       opnsenseId: 'edge',
       resource: { id: 'r1', kind: 'reservation', name: 'old', summary: '' },
       observations: [],
-      reason: 'protected',
+      reason: 'Eligible stale record.',
+      eligible: true,
+      hostId: 'main',
+      vmid: 604,
+      fingerprint: 'fp',
+    },
+    {
+      opnsenseId: 'edge',
+      resource: { id: 'r2', kind: 'reservation', name: 'odd', summary: '' },
+      observations: [],
+      reason: 'Ambiguous.',
+      eligible: false,
+    },
+    {
+      opnsenseId: 'edge',
+      resource: { id: 'r3', kind: 'domain', name: 'odd', summary: '' },
+      observations: [],
+      reason: 'Ambiguous.',
     },
   ],
   items: [
@@ -50,6 +72,17 @@ const mixed: Reconciliation = {
       owned: false,
       importAvailable: true,
       ...withIssues('unownedConflict', ['Existing configuration found.']),
+    }),
+    // Hand-made reservation and nothing else: its own group, not counted.
+    item({
+      key: 'main:703',
+      state: 'conflict',
+      owned: false,
+      reservationOnly: true,
+      ...withIssues(
+        ['unownedConflict', 'importBlocker'],
+        ['Reservation matches.', 'Expected one domain; found 0.'],
+      ),
     }),
     // Never configured: its own group, not counted.
     item({
@@ -92,6 +125,21 @@ describe('review scope and counts', () => {
       'importAvailable',
     ],
     [
+      'unowned reservation-only conflict',
+      { state: 'conflict', owned: false, reservationOnly: true },
+      'reservationOnly',
+    ],
+    [
+      'unowned reservation-only record with an unfinished operation',
+      { state: 'mismatch', owned: false, reservationOnly: true },
+      'needsReview',
+    ],
+    [
+      'owned record claiming reservationOnly',
+      { state: 'conflict', reservationOnly: true },
+      'needsReview',
+    ],
+    [
       'unowned plain conflict',
       { state: 'conflict', owned: false },
       'needsReview',
@@ -108,17 +156,78 @@ describe('review scope and counts', () => {
     expect(reviewScope(item(patch))).toBe(scope);
   });
 
-  it('counts stale and drifted records and protected candidates, never setup or unverified ones', () => {
+  it('counts stale and drifted records and eligible protected candidates only', () => {
     expect(mismatchCounts(mixed)).toEqual({
-      needsReview: 4, // mismatch, orphan, conflict, one protected candidate
+      needsReview: 4, // mismatch, orphan, conflict, one eligible protected
       notConfigured: 1,
+      reservationOnly: 1,
       importAvailable: 1,
       unverified: 1,
+    });
+    expect(eligibleProtected(mixed)).toBe(1);
+    expect(informationalProtected(mixed)).toBe(2);
+  });
+
+  it('does not count protected candidates that are not eligible', () => {
+    const none = { ...reconciliation, items: [] };
+    expect(
+      mismatchCounts({ ...none, protectedCandidates: [] }).needsReview,
+    ).toBe(0);
+    expect(mismatchCounts(none).needsReview).toBe(0);
+    expect(
+      mismatchCounts({
+        ...none,
+        protectedCandidates: mixed.protectedCandidates?.slice(1),
+      }).needsReview,
+    ).toBe(0);
+  });
+
+  it('keeps a fleet-shaped inventory near the real review load', () => {
+    const many = (n: number, patch: Partial<ReconcileItem>) =>
+      Array.from({ length: n }, (_, i) =>
+        item({
+          key: `main:${patch.state}-${i}-${patch.reservationOnly ?? ''}`,
+          ...patch,
+        }),
+      );
+    const fleet: Reconciliation = {
+      ...reconciliation,
+      protectedCandidates: Array.from({ length: 192 }, (_, i) => ({
+        opnsenseId: 'edge',
+        resource: { id: `p${i}`, kind: 'reservation', name: '', summary: '' },
+        observations: [],
+        reason: 'protected',
+        eligible: i === 0,
+      })),
+      items: [
+        ...many(2, { state: 'mismatch' }),
+        ...many(4, { state: 'conflict', owned: false, importAvailable: true }),
+        ...many(23, { state: 'conflict', owned: false, reservationOnly: true }),
+        ...many(7, { state: 'conflict', owned: false }),
+      ],
+    };
+    expect(mismatchCounts(fleet)).toEqual({
+      needsReview: 10,
+      notConfigured: 0,
+      reservationOnly: 23,
+      importAvailable: 4,
+      unverified: 0,
     });
   });
 });
 
 describe('issue details schema', () => {
+  it('accepts the optional reservationOnly signal and rejects a non-boolean', () => {
+    const parse = (value: unknown) =>
+      reconciliationSchema.safeParse({
+        ...reconciliation,
+        items: [{ ...item({}), reservationOnly: value }],
+      });
+    expect(parse(true).success).toBe(true);
+    expect(parse(undefined).success).toBe(true);
+    expect(parse('yes').success).toBe(false);
+  });
+
   it('requires a code for every issue and keeps them aligned with the prose', () => {
     const parse = (patch: Partial<ReconcileItem>) =>
       reconciliationSchema.safeParse({
@@ -186,7 +295,59 @@ describe('mismatch counts across the app', () => {
     expect(
       screen.getByRole('heading', { name: 'Import available' }),
     ).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Unverified' })).toBeVisible();
+    // Unverified stays visible with its own count even though it is not counted.
+    const unverified = screen.getByRole('region', { name: 'Unverified' });
+    expect(
+      within(unverified).getByRole('heading', { name: 'Unverified' }),
+    ).toBeVisible();
+    expect(
+      within(unverified).getByText('1', { selector: '.badge' }),
+    ).toBeVisible();
+    const reservation = screen.getByRole('region', {
+      name: 'Existing reservation, proxy not configured',
+    });
+    expect(
+      within(reservation).getByText('1', { selector: '.badge' }),
+    ).toBeVisible();
+    // Protected records that are not eligible are informational, not counted.
+    expect(
+      screen.getByText(/2 protected records are listed for information only/),
+    ).toBeVisible();
+  });
+
+  it('filters existing-reservation containers apart from drift and not configured', async () => {
+    mockApi({
+      ...reconciliation,
+      items: [
+        item({
+          key: 'main:604',
+          state: 'conflict',
+          owned: false,
+          reservationOnly: true,
+          ...withIssues('unownedConflict', ['Reservation matches.']),
+        }),
+        item({
+          key: 'pvedell:701',
+          state: 'missing',
+          owned: false,
+          ...withIssues('notConfigured', ['Nothing configured yet.']),
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Containers' });
+    expect(screen.queryByRole('button', { name: /need review/ })).toBeNull();
+    await user.selectOptions(
+      screen.getByLabelText('Configuration'),
+      'reservationOnly',
+    );
+    expect(
+      screen.getByRole('button', { name: /Inspect immich/ }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: /Inspect jellyfin/ }),
+    ).toBeNull();
   });
 
   it('filters the inventory by configuration scope', async () => {

@@ -39,6 +39,10 @@ const configurationFilters: { value: ConfigurationFilter; label: string }[] = [
   { value: '', label: 'All records' },
   { value: 'needsReview', label: 'Needs review' },
   { value: 'notConfigured', label: 'Not configured' },
+  {
+    value: 'reservationOnly',
+    label: 'Existing reservation, proxy not configured',
+  },
   { value: 'importAvailable', label: 'Import available' },
 ];
 export function InventoryView({

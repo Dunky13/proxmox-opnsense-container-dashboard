@@ -206,6 +206,7 @@ export const itemSchema = z
     canAcceptChanges: z.boolean().optional(),
     acceptBlocked: text.optional(),
     importAvailable: z.boolean().optional(),
+    reservationOnly: z.boolean().optional(),
     importIssues: list(text).optional(),
     existingRoute: routeSchema.optional(),
     existingResources: list(

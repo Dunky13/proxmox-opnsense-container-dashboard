@@ -33,6 +33,10 @@ type importCandidate struct {
 	Issues    []string
 	Subnet    *SubnetReference
 	Shared    *AccessListReference
+	// ReservationOnly marks a candidate whose only match is one reservation that
+	// matches the intended IP and MAC exactly, with no domain or handle found.
+	// It is classification only: eligibility and import planning ignore it.
+	ReservationOnly bool
 }
 
 // Explicit allowlists prevent arbitrary getter fields, headers, auth values and
@@ -237,6 +241,10 @@ func inspectImport(st State, inv Inventory, h Host, o OPNsense, c Container, sna
 				break
 			}
 		}
+	}
+	if len(reservations) == 1 && len(out.Existing) == 1 {
+		_, exact := reservationMatches(reservations[0], desired)
+		out.ReservationOnly = exact && len(sites) == 0 && len(handles) == 0
 	}
 	if len(out.Existing) == 0 {
 		return out

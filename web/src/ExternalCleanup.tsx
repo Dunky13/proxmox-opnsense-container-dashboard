@@ -8,6 +8,7 @@ import {
 } from './schemas';
 import { PlanReview } from './ContainerDetail';
 import { Notice } from './ui';
+import { informationalProtected } from './viewmodel';
 
 type Candidate = NonNullable<Reconciliation['protectedCandidates']>[number];
 type Target = NonNullable<Operation['externalCleanup']>['targets'][number];
@@ -285,6 +286,13 @@ export function ExternalCleanup({
         after external-use acknowledgement. Unknown or ambiguous records stay
         protected for the reason shown.
       </p>
+      {informationalProtected(data) > 0 && (
+        <p className="muted">
+          {informationalProtected(data)} protected{' '}
+          {informationalProtected(data) === 1 ? 'record is' : 'records are'}{' '}
+          listed for information only and not counted as needing review.
+        </p>
+      )}
       {[...groups].map(([key, group]) => (
         <ExternalGroup
           key={key}

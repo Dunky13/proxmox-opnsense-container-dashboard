@@ -21,30 +21,44 @@ export type ContainerView = {
   search: string;
 };
 // Which review group a reconciled record belongs to. Only needsReview is stale
-// or drifted; notConfigured and importAvailable are expected starting points and
-// unverified means the provider state could not be read.
+// or drifted. notConfigured, reservationOnly and importAvailable are expected
+// starting points; unverified means the provider state could not be read.
 export type ReviewScope =
-  'ok' | 'needsReview' | 'notConfigured' | 'importAvailable' | 'unverified';
+  | 'ok'
+  | 'needsReview'
+  | 'notConfigured'
+  | 'reservationOnly'
+  | 'importAvailable'
+  | 'unverified';
 export type ConfigurationFilter =
-  '' | 'needsReview' | 'notConfigured' | 'importAvailable';
+  '' | 'needsReview' | 'notConfigured' | 'reservationOnly' | 'importAvailable';
 export function reviewScope(item: ReconcileItem): ReviewScope {
   if (item.state === 'healthy') return 'ok';
   if (item.state === 'unknown') return 'unverified';
   if (!item.owned && item.state === 'missing') return 'notConfigured';
-  // The server reports importable unowned records as a conflict; an unfinished
+  // The server reports these unowned records as a conflict; an unfinished
   // operation turns them into a mismatch, which stays a review item.
-  if (!item.owned && item.state === 'conflict' && item.importAvailable)
-    return 'importAvailable';
+  if (!item.owned && item.state === 'conflict') {
+    if (item.importAvailable) return 'importAvailable';
+    // Hand-made reservation, nothing else found: a starting point, not drift.
+    if (item.reservationOnly) return 'reservationOnly';
+  }
   return 'needsReview';
 }
 export type MismatchCounts = Record<Exclude<ReviewScope, 'ok'>, number>;
+// Only eligible protected candidates are stale records awaiting a decision. The
+// rest are shown for information and never counted.
+export const eligibleProtected = (data: Reconciliation) =>
+  data.protectedCandidates?.filter((c) => c.eligible === true).length ?? 0;
+export const informationalProtected = (data: Reconciliation) =>
+  (data.protectedCandidates?.length ?? 0) - eligibleProtected(data);
 // The one place that counts records, so the sidebar badge, the inventory
-// button and the Mismatches page cannot disagree. Protected external records
-// are stale provider records that need review too.
+// button and the Mismatches page cannot disagree.
 export function mismatchCounts(data: Reconciliation): MismatchCounts {
   const counts: MismatchCounts = {
-    needsReview: data.protectedCandidates?.length ?? 0,
+    needsReview: eligibleProtected(data),
     notConfigured: 0,
+    reservationOnly: 0,
     importAvailable: 0,
     unverified: 0,
   };

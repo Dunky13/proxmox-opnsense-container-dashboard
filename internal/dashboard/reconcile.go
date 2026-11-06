@@ -15,17 +15,20 @@ type ReconcileItem struct {
 	AcceptBlocked      string             `json:"acceptBlocked,omitempty"`
 	ImportAvailable    bool               `json:"importAvailable,omitempty"`
 	ImportIssues       []string           `json:"importIssues,omitempty"`
-	ExistingRoute      *RouteConfig       `json:"existingRoute,omitempty"`
-	ExistingResources  []ExistingResource `json:"existingResources,omitempty"`
-	ResolvedSubnet     *SubnetReference   `json:"resolvedSubnet,omitempty"`
-	PrivateAccessList  *AccessList        `json:"privateAccessList,omitempty"`
-	Key                string             `json:"key"`
-	State              string             `json:"state"`
-	Issues             []string           `json:"issues"`
-	IssueDetails       []IssueDetail      `json:"issueDetails"`
-	Owned              bool               `json:"owned"`
-	DesiredRoute       *RouteConfig       `json:"desiredRoute,omitempty"`
-	RouteUnavailable   bool               `json:"routeUnavailable,omitempty"`
+	// ReservationOnly: an unowned container whose only existing provider record
+	// is one exact IP/MAC reservation. A normal starting point, not drift.
+	ReservationOnly   bool               `json:"reservationOnly,omitempty"`
+	ExistingRoute     *RouteConfig       `json:"existingRoute,omitempty"`
+	ExistingResources []ExistingResource `json:"existingResources,omitempty"`
+	ResolvedSubnet    *SubnetReference   `json:"resolvedSubnet,omitempty"`
+	PrivateAccessList *AccessList        `json:"privateAccessList,omitempty"`
+	Key               string             `json:"key"`
+	State             string             `json:"state"`
+	Issues            []string           `json:"issues"`
+	IssueDetails      []IssueDetail      `json:"issueDetails"`
+	Owned             bool               `json:"owned"`
+	DesiredRoute      *RouteConfig       `json:"desiredRoute,omitempty"`
+	RouteUnavailable  bool               `json:"routeUnavailable,omitempty"`
 }
 
 // IssueDetail pairs an issue's display prose with a stable machine-readable
@@ -248,6 +251,7 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 			item.ExistingRoute = candidate.Route
 			item.ImportIssues = candidate.Issues
 			item.ImportAvailable = candidate.eligible()
+			item.ReservationOnly = candidate.ReservationOnly
 			if len(candidate.Existing) > 0 {
 				item.State = "conflict"
 				for _, issue := range candidate.Issues {

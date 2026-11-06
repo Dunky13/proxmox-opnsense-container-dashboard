@@ -108,8 +108,9 @@ export function Mismatches({
           <p>
             Stale or drifted records only. Select stale reservations or proxies,
             review exact UUIDs, then run cleanup manually. Containers that are
-            simply not configured yet, or have an importable existing
-            configuration, are grouped below and are not counted.
+            simply not configured yet, have only an existing reservation, or
+            have an importable existing configuration are grouped below and are
+            not counted.
           </p>
         </div>
         <Badge>{counts.needsReview} need review</Badge>
@@ -248,6 +249,15 @@ export function Mismatches({
         description="No reservation or proxy exists yet. This is a starting point, not drift."
         action="Configure"
         items={inGroup('notConfigured')}
+        data={data}
+        settings={settings}
+        onInspect={onInspect}
+      />
+      <SetupGroup
+        title="Existing reservation, proxy not configured"
+        description="A KEA reservation matching this container's IP and MAC exists, but no proxy domain or handle. Typically created by hand before the dashboard. Not drift, and not importable until a proxy exists."
+        action="Configure"
+        items={inGroup('reservationOnly')}
         data={data}
         settings={settings}
         onInspect={onInspect}
