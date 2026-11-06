@@ -1023,6 +1023,8 @@ select:disabled {
 .record-actions .disabled-reason {
   flex: 0 0 100%;
   margin: 0;
+  /* Wrap within the buttons' width instead of widening the row's action column. */
+  contain: inline-size;
 }
 .container-row .issue-summary:empty {
   display: none;
