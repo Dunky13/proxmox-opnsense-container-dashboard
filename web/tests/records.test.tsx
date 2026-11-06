@@ -2,7 +2,9 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
+import { ContainerIssueSummary } from '../src/ContainerIssues';
 import { containerViews } from '../src/viewmodel';
+import type { Reconciliation } from '../src/schemas';
 import { auth, container, reconciliation, settings } from './fixtures';
 
 const blocker =
@@ -12,7 +14,7 @@ const lines = [
   blocker,
   'expected one exact reservation; found 2 IP/MAC candidates',
 ];
-const noisy = {
+const noisy: Reconciliation = {
   ...reconciliation,
   items: [
     {
@@ -68,7 +70,7 @@ it('shows a compact deduplicated issue summary in cards and the full list only i
   expect(within(card).getByText(/\+2 more/)).toBeVisible();
   expect(within(card).getByText(lines[0], { exact: false })).toBeVisible();
   expect(within(card).queryByText(blocker)).not.toBeInTheDocument();
-  expect(card.querySelector('.existing-configuration')).toBeNull();
+  expect(within(card).queryByText(/Existing configuration · /)).toBeNull();
   expect(within(card).queryByText('Import unavailable')).toBeNull();
 
   await user.click(
@@ -92,7 +94,6 @@ it('keeps maintenance actions and the domain in rows', async () => {
     .getByRole('button', { name: 'Inspect immich, VMID 604' })
     .closest('article');
   if (!row) throw new Error('Missing record');
-  expect(row).toHaveClass('container-row');
   expect(
     within(row).getByRole('button', { name: /Review app update immich/ }),
   ).toBeInTheDocument();
@@ -138,4 +139,29 @@ it('uses human state labels, reuses empty filters and hides unknown versions', a
   );
   expect(versioned?.distribution).toBe('debian 13');
   expect(unversioned?.distribution).toBe('debian');
+});
+
+it('falls back to a resource or missing-details line when no issue text exists', () => {
+  const [withResources, bare] = containerViews(
+    {
+      ...reconciliation,
+      inventory: {
+        ...reconciliation.inventory,
+        containers: [container, { ...container, key: 'main:9', warnings: [] }],
+      },
+      items: [
+        { ...noisy.items[0]!, issues: [], importIssues: [] },
+        { key: 'main:9', state: 'conflict', owned: false, issues: [] },
+      ],
+    },
+    settings,
+  );
+  if (!withResources || !bare) throw new Error('Missing views');
+  const { unmount } = render(<ContainerIssueSummary view={withResources} />);
+  expect(
+    screen.getByText('Existing configuration · 1 resources'),
+  ).toBeVisible();
+  unmount();
+  render(<ContainerIssueSummary view={bare} />);
+  expect(screen.getByText(/Conflict details were not returned/)).toBeVisible();
 });

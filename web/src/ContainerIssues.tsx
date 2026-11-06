@@ -2,6 +2,9 @@ import type { ContainerView } from './viewmodel';
 import { Field } from './ui';
 import { ResourceDrift } from './ResourceDrift';
 
+const noConflictDetails =
+  'Conflict details were not returned. Refresh before changing this container.';
+
 // Backend appends import blockers to item.issues as well as importIssues, so
 // dedupe across both lists before any rendering.
 function collectIssues(view: ContainerView) {
@@ -11,7 +14,8 @@ function collectIssues(view: ContainerView) {
   const warnings = [...new Set([...view.container.warnings, ...issues])].filter(
     (issue) =>
       !importIssues.includes(issue) &&
-      (!resources.length || issue !== 'unowned reservation or domain conflicts'),
+      (!resources.length ||
+        issue !== 'unowned reservation or domain conflicts'),
   );
   return { issues, resources, importIssues, warnings };
 }
@@ -19,14 +23,18 @@ function collectIssues(view: ContainerView) {
 // Compact card/row summary: first issue clamped to two lines plus a count.
 // Full detail, resources and help live in the inspector.
 export function ContainerIssueSummary({ view }: { view: ContainerView }) {
-  const { warnings, importIssues } = collectIssues(view);
+  const { warnings, importIssues, resources } = collectIssues(view);
   const lines = [...warnings, ...importIssues];
+  if (!lines.length && resources.length)
+    lines.push(`Existing configuration · ${resources.length} resources`);
+  else if (!lines.length && view.item?.state === 'conflict')
+    lines.push(noConflictDetails);
   const more = lines.length - 1;
   // Always rendered so cards keep a flexible grid row above the actions.
   return (
     <div className="issue-summary">
       {lines.length > 0 && (
-        <p className="issue-summary-line" title={lines[0]}>
+        <p className="issue-summary-line">
           {lines[0]}
           {more > 0 && (
             <span className="issue-summary-more"> · +{more} more</span>
@@ -119,12 +127,7 @@ export function ContainerIssues({
       {!warnings.length &&
         !resources.length &&
         !importIssues.length &&
-        view.item?.state === 'conflict' && (
-          <p>
-            Conflict details were not returned. Refresh before changing this
-            container.
-          </p>
-        )}
+        view.item?.state === 'conflict' && <p>{noConflictDetails}</p>}
       {view.item?.state === 'conflict' &&
         !profileMismatch &&
         !resources.length && (

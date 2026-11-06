@@ -472,9 +472,7 @@ function ContainerRecord({
         <code className="record-mac">{c.mac || 'MAC unknown'}</code>
       </div>
       <div className="record-distro">{view.distribution}</div>
-      <p className="record-domain" title={view.domain || undefined}>
-        {view.domain || 'Domain unavailable'}
-      </p>
+      <p className="record-domain">{view.domain || 'Domain unavailable'}</p>
       <div className="record-state">
         {mode === 'rows' && <Status value={c.status} />}
         {view.exposure !== 'Not configured' && (
@@ -495,7 +493,9 @@ function ContainerRecord({
             key={kind}
             className="button"
             disabled={!!reason}
-            aria-describedby={reason ? `maintenance-status-${c.key}` : undefined}
+            aria-describedby={
+              reason ? `maintenance-status-${c.key}` : undefined
+            }
             aria-label={`Review ${label.toLowerCase()} ${c.name}, VMID ${c.vmid}`}
             onClick={(event) => onSelect(event.currentTarget, kind)}
           >
@@ -516,11 +516,7 @@ function ContainerRecord({
           Configure
         </button>
         {maintenanceReasons.length > 0 && (
-          <p
-            id={`maintenance-status-${c.key}`}
-            className="disabled-reason"
-            title={maintenanceReasons.join(' ')}
-          >
+          <p id={`maintenance-status-${c.key}`} className="disabled-reason">
             {maintenanceReasons.join(' ')}
           </p>
         )}

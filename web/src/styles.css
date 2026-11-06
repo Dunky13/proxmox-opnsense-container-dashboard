@@ -1023,11 +1023,9 @@ select:disabled {
 .record-actions .disabled-reason {
   flex: 0 0 100%;
   margin: 0;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
+}
+.container-row .issue-summary:empty {
+  display: none;
 }
 .issue-summary {
   grid-column: 1 / -1;
@@ -1622,7 +1620,7 @@ details:not(.provider-editor) > summary {
   .container-row {
     grid-template-columns:
       minmax(0, 1.3fr) minmax(130px, 1fr) minmax(0, 0.8fr) minmax(0, 1fr)
-      15rem;
+      auto;
   }
   .container-row .record-identity {
     grid-column: 1;
