@@ -2,6 +2,49 @@ import type { ContainerView } from './viewmodel';
 import { Field } from './ui';
 import { ResourceDrift } from './ResourceDrift';
 
+const noConflictDetails =
+  'Conflict details were not returned. Refresh before changing this container.';
+
+// Backend appends import blockers to item.issues as well as importIssues, so
+// dedupe across both lists before any rendering.
+function collectIssues(view: ContainerView) {
+  const issues = view.item?.issues ?? [];
+  const resources = view.item?.existingResources ?? [];
+  const importIssues = [...new Set(view.item?.importIssues ?? [])];
+  const warnings = [...new Set([...view.container.warnings, ...issues])].filter(
+    (issue) =>
+      !importIssues.includes(issue) &&
+      (!resources.length ||
+        issue !== 'unowned reservation or domain conflicts'),
+  );
+  return { issues, resources, importIssues, warnings };
+}
+
+// Compact card/row summary: first issue clamped to two lines plus a count.
+// Full detail, resources and help live in the inspector.
+export function ContainerIssueSummary({ view }: { view: ContainerView }) {
+  const { warnings, importIssues, resources } = collectIssues(view);
+  const lines = [...warnings, ...importIssues];
+  if (!lines.length && resources.length)
+    lines.push(`Existing configuration · ${resources.length} resources`);
+  else if (!lines.length && view.item?.state === 'conflict')
+    lines.push(noConflictDetails);
+  const more = lines.length - 1;
+  // Always rendered so cards keep a flexible grid row above the actions.
+  return (
+    <div className="issue-summary">
+      {lines.length > 0 && (
+        <p className="issue-summary-line">
+          {lines[0]}
+          {more > 0 && (
+            <span className="issue-summary-more"> · +{more} more</span>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function ContainerIssues({
   view,
   expandedResources = false,
@@ -10,13 +53,7 @@ export function ContainerIssues({
   expandedResources?: boolean;
 }) {
   const c = view.container;
-  const issues = view.item?.issues ?? [];
-  const resources = view.item?.existingResources ?? [];
-  const importIssues = view.item?.importIssues ?? [];
-  const warnings = [...new Set([...c.warnings, ...issues])].filter(
-    (issue) =>
-      !resources.length || issue !== 'unowned reservation or domain conflicts',
-  );
+  const { issues, resources, importIssues, warnings } = collectIssues(view);
   const profileMismatch = issues.some((issue) =>
     [
       'container does not match host profile',
@@ -74,8 +111,8 @@ export function ContainerIssues({
         <div className="import-blockers">
           <strong>Import unavailable</strong>
           <ul className="warnings">
-            {importIssues.map((issue, index) => (
-              <li key={index}>{issue}</li>
+            {importIssues.map((issue) => (
+              <li key={issue}>{issue}</li>
             ))}
           </ul>
         </div>
@@ -90,12 +127,7 @@ export function ContainerIssues({
       {!warnings.length &&
         !resources.length &&
         !importIssues.length &&
-        view.item?.state === 'conflict' && (
-          <p>
-            Conflict details were not returned. Refresh before changing this
-            container.
-          </p>
-        )}
+        view.item?.state === 'conflict' && <p>{noConflictDetails}</p>}
       {view.item?.state === 'conflict' &&
         !profileMismatch &&
         !resources.length && (

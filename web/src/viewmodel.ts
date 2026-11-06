@@ -48,7 +48,7 @@ export function containerViews(
         : (container.desiredRoute ?? item?.desiredRoute ?? item?.existingRoute);
     const distribution =
       container.distribution && container.distribution !== 'unknown'
-        ? `${container.distribution}${container.version ? ` ${container.version}` : ' · version unknown'}`
+        ? `${container.distribution}${container.version ? ` ${container.version}` : ''}`
         : 'Distribution unknown';
     const domain = firewall ? `${container.name}.${firewall.domainBase}` : '';
     const exposure = route

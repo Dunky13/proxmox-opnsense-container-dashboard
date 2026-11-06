@@ -116,7 +116,9 @@ for (const viewport of [
           const inspector = page.getByRole('complementary', {
             name: 'Details for dbug-git',
           });
-          for (const ct of legacy) {
+          // Records stay compact; the full explanation lives in the inspector.
+          // dbug-git is inspected last so later steps keep using its inspector.
+          for (const ct of [...legacy].reverse()) {
             const record = page.locator('.container-record').filter({
               has: page.getByRole('button', {
                 name: `Inspect ${ct.name}, VMID ${ct.vmid}`,
@@ -124,17 +126,30 @@ for (const viewport of [
               }),
             });
             await expect(
-              record.getByText('container does not match host profile', {
+              record.getByText(/creation identity unavailable/),
+            ).toBeVisible();
+            await expect(record.getByText('+1 more')).toBeVisible();
+            await expect(record.getByText('Why blocked?')).toHaveCount(0);
+            await record
+              .getByRole('button', {
+                name: `Configure ${ct.name}, VMID ${ct.vmid}`,
+              })
+              .click();
+            const detail = page.getByRole('complementary', {
+              name: `Details for ${ct.name}`,
+            });
+            await expect(
+              detail.getByText('container does not match host profile', {
                 exact: true,
               }),
             ).toBeVisible();
             await expect(
-              record.getByText(/creation identity unavailable/),
+              detail.getByText(/creation identity unavailable/),
             ).toBeVisible();
-            await record
+            await detail
               .getByText('Why blocked? Address rules', { exact: true })
               .click();
-            const explanation = record.locator('details').filter({
+            const explanation = detail.locator('details').filter({
               has: page.getByText('Why blocked? Address rules', {
                 exact: true,
               }),
