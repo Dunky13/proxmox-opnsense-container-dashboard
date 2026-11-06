@@ -5,7 +5,13 @@ import { App } from '../src/App';
 import { ContainerIssueSummary } from '../src/ContainerIssues';
 import { containerViews } from '../src/viewmodel';
 import type { Reconciliation } from '../src/schemas';
-import { auth, container, reconciliation, settings } from './fixtures';
+import {
+  auth,
+  container,
+  reconciliation,
+  settings,
+  withIssues,
+} from './fixtures';
 
 const blocker =
   'Import unavailable: expected one standalone domain or child domain for immich.example.test; found 0';
@@ -22,7 +28,10 @@ const noisy: Reconciliation = {
       state: 'conflict',
       owned: false,
       // The backend appends import blockers to both lists.
-      issues: [lines[0], blocker, blocker, lines[2]],
+      ...withIssues(
+        ['unownedConflict', 'importBlocker', 'importBlocker', 'importBlocker'],
+        [lines[0], blocker, blocker, lines[2]],
+      ),
       importIssues: [blocker, lines[2], blocker],
       existingResources: [
         {
@@ -150,8 +159,13 @@ it('falls back to a resource or missing-details line when no issue text exists',
         containers: [container, { ...container, key: 'main:9', warnings: [] }],
       },
       items: [
-        { ...noisy.items[0]!, issues: [], importIssues: [] },
-        { key: 'main:9', state: 'conflict', owned: false, issues: [] },
+        { ...noisy.items[0]!, ...withIssues('', []), importIssues: [] },
+        {
+          key: 'main:9',
+          state: 'conflict',
+          owned: false,
+          ...withIssues('', []),
+        },
       ],
     },
     settings,

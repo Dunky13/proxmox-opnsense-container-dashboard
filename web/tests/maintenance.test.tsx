@@ -12,6 +12,7 @@ import {
   plan,
   reconciliation,
   settings,
+  withIssues,
 } from './fixtures';
 
 const resourceId = 'a1111111-1111-4111-8111-111111111609';
@@ -138,7 +139,9 @@ it('reviews precise hostname drift and consumes a metadata-only acceptance after
                 state: 'mismatch',
                 owned: true,
                 canAcceptChanges: true,
-                issues: ['owned resources changed or are missing'],
+                ...withIssues('ownedChanged', [
+                  'owned resources changed or are missing',
+                ]),
                 drift: [
                   {
                     id: resourceId,
@@ -215,7 +218,7 @@ it('requires selected orphan UUIDs and reviews only those effects', async () => 
             key: 'main:609',
             state: 'ownedOrphan',
             owned: true,
-            issues: ['Container absent.'],
+            ...withIssues('ownedOrphan', ['Container absent.']),
             managedResources: [
               {
                 id: resourceId,
@@ -292,7 +295,7 @@ it('adds a reservation with an empty app port and no proxy effects', async () =>
             key: container.key,
             state: 'missing',
             owned: false,
-            issues: [],
+            ...withIssues('', []),
             canAddReservation: true,
           },
         ],
@@ -359,7 +362,7 @@ it('withdraws cleanup confirmation when current observations change', async () =
         key: 'main:609',
         state: 'ownedOrphan',
         owned: true,
-        issues: [],
+        ...withIssues('', []),
         managedResources: [
           {
             id: resourceId,
@@ -415,7 +418,9 @@ it('review regression: allows reservation-only review beside an existing unowned
               key: container.key,
               state: 'conflict',
               owned: false,
-              issues: ['unowned Caddy domain matches this app'],
+              ...withIssues('unownedConflict', [
+                'unowned Caddy domain matches this app',
+              ]),
               canAddReservation: true,
             },
           ],
@@ -484,7 +489,8 @@ it.each([
       name: 'Add missing reservation',
     });
     expect(button).toBeDisabled();
-    expect(screen.getByText(reason)).toBeVisible();
+    // The inspector merges the server refusal and the client guard into one reason.
+    expect(screen.getByText(reason, { exact: false })).toBeVisible();
     await user.click(button);
     expect(
       requests.mock.calls.filter(
@@ -505,7 +511,9 @@ it('review regression: exposes independent orphan selection despite a whole-app 
         state: 'conflict',
         owned: true,
         cleanupSelectable: true,
-        issues: ['a retained foreign proxy references the reservation'],
+        ...withIssues('foreignReferences', [
+          'a retained foreign proxy references the reservation',
+        ]),
         managedResources: [
           {
             id: resourceId,

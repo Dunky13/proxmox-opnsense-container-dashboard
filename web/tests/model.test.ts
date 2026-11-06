@@ -10,9 +10,25 @@ import {
   containerViews,
   emptyFilters,
   filterViews,
-  updateBlocked,
+  type ContainerView,
 } from '../src/viewmodel';
+import { eligibility, reasonOf } from '../src/eligibility';
 import { container, reconciliation, settings } from './fixtures';
+const noOperations = { operations: [] };
+
+const updateBlocked = (
+  view: ContainerView,
+  jobs: Parameters<typeof eligibility>[1]['jobs'],
+  kind: 'appUpdate' | 'osUpdate',
+) =>
+  reasonOf(
+    eligibility(view, {
+      data: reconciliation,
+      jobs,
+      activityLoaded: true,
+      now: Date.now(),
+    })[kind],
+  );
 
 describe('API boundaries', () => {
   it('accepts Go null slices without accepting malformed or missing data', () => {
@@ -105,25 +121,36 @@ describe('shared inventory view model', () => {
   it('composes filters and searches identity, address, provider and distro values', () => {
     const views = containerViews(reconciliation, settings);
     expect(
-      filterViews(views, {
-        query: 'firewall.example.test 06:04 13 immich.example.test',
-        host: 'main',
-        state: 'running',
-        distribution: 'debian',
-        exposure: 'LAN / VPN',
-      }).map((v) => v.container.key),
+      filterViews(
+        views,
+        {
+          query: 'firewall.example.test 06:04 13 immich.example.test',
+          host: 'main',
+          state: 'running',
+          distribution: 'debian',
+          exposure: 'LAN / VPN',
+          configuration: '',
+        },
+        noOperations,
+      ).map((v) => v.container.key),
     ).toEqual(['main:604']);
     expect(
-      filterViews(views, { ...emptyFilters, query: '192.168.7.1' }).map(
-        (v) => v.container.key,
-      ),
+      filterViews(
+        views,
+        { ...emptyFilters, query: '192.168.7.1' },
+        noOperations,
+      ).map((v) => v.container.key),
     ).toEqual(['pvedell:701']);
     expect(
-      filterViews(views, {
-        ...emptyFilters,
-        query: 'vaultwarden',
-        state: 'running',
-      }),
+      filterViews(
+        views,
+        {
+          ...emptyFilters,
+          query: 'vaultwarden',
+          state: 'running',
+        },
+        noOperations,
+      ),
     ).toEqual([]);
   });
   it('explains stopped/template/SSH update exclusions truthfully', () => {
@@ -169,11 +196,13 @@ it('filters unknown distributions separately from all distributions and searches
     settings,
   );
   expect(
-    filterViews(views, { ...emptyFilters, distribution: '__unknown__' }).map(
-      (v) => v.container.key,
-    ),
+    filterViews(
+      views,
+      { ...emptyFilters, distribution: '__unknown__' },
+      noOperations,
+    ).map((v) => v.container.key),
   ).toEqual(['main:609']);
   expect(
-    filterViews(views, { ...emptyFilters, query: 'http 2283' }),
+    filterViews(views, { ...emptyFilters, query: 'http 2283' }, noOperations),
   ).toHaveLength(2);
 });

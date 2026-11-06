@@ -20,12 +20,66 @@ export type ContainerView = {
   config: string;
   search: string;
 };
+// Which review group a reconciled record belongs to. Only needsReview is stale
+// or drifted. notConfigured, reservationOnly and importAvailable are expected
+// starting points; unverified means the provider state could not be read.
+export type ReviewScope =
+  | 'ok'
+  | 'needsReview'
+  | 'notConfigured'
+  | 'reservationOnly'
+  | 'importAvailable'
+  | 'unverified';
+export type ConfigurationFilter = '' | Exclude<ReviewScope, 'ok'>;
+export function reviewScope(
+  item: ReconcileItem,
+  data: Pick<Reconciliation, 'operations'>,
+): ReviewScope {
+  // An unfinished operation stays a review item even when a failed host read
+  // later turns the record into unknown.
+  if (unfinishedOperation(data, item.key)) return 'needsReview';
+  if (item.state === 'healthy') return 'ok';
+  if (item.state === 'unknown') return 'unverified';
+  if (!item.owned && item.state === 'missing') return 'notConfigured';
+  // The server reports these unowned records as a conflict; an unfinished
+  // operation turns them into a mismatch, which stays a review item.
+  if (!item.owned && item.state === 'conflict') {
+    if (item.importAvailable) return 'importAvailable';
+    // Hand-made reservation, nothing else found: a starting point, not drift.
+    if (item.reservationOnly) return 'reservationOnly';
+  }
+  return 'needsReview';
+}
+export type MismatchCounts = Record<Exclude<ReviewScope, 'ok'>, number>;
+// Only eligible protected candidates are stale records awaiting a decision. The
+// rest are shown for information and never counted.
+export const eligibleProtected = (data: Reconciliation) =>
+  data.protectedCandidates?.filter((c) => c.eligible === true).length ?? 0;
+export const informationalProtected = (data: Reconciliation) =>
+  (data.protectedCandidates?.length ?? 0) - eligibleProtected(data);
+// Every surface classifies records with reviewScope, so the sidebar badge, the
+// inventory button and the Mismatches groups cannot disagree.
+export function mismatchCounts(data: Reconciliation): MismatchCounts {
+  const counts: MismatchCounts = {
+    needsReview: eligibleProtected(data),
+    notConfigured: 0,
+    reservationOnly: 0,
+    importAvailable: 0,
+    unverified: 0,
+  };
+  for (const item of data.items) {
+    const scope = reviewScope(item, data);
+    if (scope !== 'ok') counts[scope] += 1;
+  }
+  return counts;
+}
 export type Filters = {
   query: string;
   host: string;
   state: string;
   distribution: string;
   exposure: string;
+  configuration: ConfigurationFilter;
 };
 export const emptyFilters: Filters = {
   query: '',
@@ -33,6 +87,7 @@ export const emptyFilters: Filters = {
   state: '',
   distribution: '',
   exposure: '',
+  configuration: '',
 };
 export function containerViews(
   data: Reconciliation,
@@ -118,6 +173,7 @@ export function containerViews(
 export function filterViews(
   views: ContainerView[],
   filters: Filters,
+  data: Pick<Reconciliation, 'operations'>,
 ): ContainerView[] {
   const words = filters.query
     .trim()
@@ -133,7 +189,9 @@ export function filterViews(
         (filters.distribution === '__unknown__'
           ? !v.container.distribution || v.container.distribution === 'unknown'
           : v.container.distribution === filters.distribution)) &&
-      (!filters.exposure || v.exposure === filters.exposure),
+      (!filters.exposure || v.exposure === filters.exposure) &&
+      (!filters.configuration ||
+        (!!v.item && reviewScope(v.item, data) === filters.configuration)),
   );
 }
 export function stateLabel(state: string): string {
@@ -158,124 +216,77 @@ export function stateLabel(state: string): string {
   };
   return labels[state] ?? state;
 }
+// Address profiles describe the intended addresses; the host's own range is the
+// first profile and extra profiles cover other VLANs on the same node.
+export function addressProfiles(view: ContainerView) {
+  return view.host ? [view.host, ...(view.host.addressProfiles ?? [])] : [];
+}
+export function vmidOutsideProfiles(view: ContainerView): boolean {
+  const profiles = addressProfiles(view);
+  return (
+    profiles.length > 0 &&
+    !profiles.some(
+      (profile) =>
+        view.container.vmid >= profile.vmidMin &&
+        view.container.vmid <= profile.vmidMax,
+    )
+  );
+}
+// Inventory older than this is display only; App invalidates it and the
+// eligibility rules re-check it at evaluation time.
+const inventoryFreshnessMs = 5 * 60 * 1000;
+export function inventoryExpired(observedAt: string, now: number): boolean {
+  const observed = Date.parse(observedAt);
+  return !Number.isFinite(observed) || now - observed > inventoryFreshnessMs;
+}
+// Mirrors the append-only codes in internal/dashboard/reconcile.go. The schema
+// keeps codes as text so a newer server still parses; this type catches typos.
+export type IssueCode =
+  | 'readIncomplete'
+  | 'routeUnavailable'
+  | 'subnetUnresolved'
+  | 'subnetChanged'
+  | 'identityChanged'
+  | 'ownedChanged'
+  | 'hostProfileMismatch'
+  | 'routeLayoutChanged'
+  | 'foreignReferences'
+  | 'routeSpecInvalid'
+  | 'sharedAccessListChanged'
+  | 'ownedMissing'
+  | 'ownedDiffers'
+  | 'unownedConflict'
+  | 'notConfigured'
+  | 'importBlocker'
+  | 'operationIncomplete'
+  | 'vmidReused'
+  | 'prerequisitesMissing'
+  | 'cleanupConflict'
+  | 'ownedOrphan';
+export function hasIssueCode(
+  item: ReconcileItem | undefined,
+  code: IssueCode,
+): boolean {
+  return !!item?.issueDetails.some((detail) => detail.code === code);
+}
+export const unfinishedOperation = (
+  data: Pick<Reconciliation, 'operations'>,
+  key: string,
+) => data.operations.some((o) => o.key === key && o.status !== 'succeeded');
+export const busyJob = (jobs: Job[], key: string) =>
+  jobs.some((j) => j.key === key && (activeJob(j) || uncertainJob(j)));
 export function activeJob(job: Job): boolean {
   return job.status === 'queued' || job.status === 'running';
 }
 export type JobAttemptState = 'requesting' | 'uncertain';
+export function attemptKey(container: Container): string {
+  return `${container.key}:${container.identity}`;
+}
 export function uncertainJob(job: Job): boolean {
   return (
     ['timedOut', 'interrupted', 'rebootRequired'].includes(job.status) &&
     !job.acknowledged
   );
-}
-export function updateBlocked(
-  view: ContainerView,
-  jobs: Job[],
-  kind: Job['kind'],
-): string {
-  const c = view.container;
-  if (view.stale)
-    return 'Host inventory is stale. Refresh before requesting an update.';
-  if (c.template) return 'Templates cannot be updated.';
-  if (c.status !== 'running')
-    return 'Updates require a running container. Start it in Proxmox, then refresh.';
-  if (!c.identity)
-    return 'Container generation is unverified. Add the required generation marker in Proxmox, then refresh.';
-  if (!view.host?.ssh.enabled)
-    return 'SSH updates are not enabled for this host. Configure server-side SSH in Settings.';
-  if (jobs.some((j) => j.key === c.key && (activeJob(j) || uncertainJob(j))))
-    return 'An update is active or needs acknowledgement in Activity.';
-  if (
-    kind === 'osUpdate' &&
-    !['debian', 'ubuntu', 'alpine'].includes(c.distribution.toLowerCase())
-  )
-    return 'OS update support is unknown. The server supports Debian, Ubuntu and Alpine after SSH inspection.';
-  return '';
-}
-export function ensureBlocked(
-  view: ContainerView,
-  data: Reconciliation,
-): string {
-  if (!data.inventory.complete)
-    return 'Complete inventory is required. Resolve host errors and refresh.';
-  if (!view.item || view.item.state === 'unknown')
-    return 'Provider state is unknown. Resolve the inventory or firewall read failure and refresh.';
-  if (view.item.state === 'conflict')
-    return view.item.importAvailable
-      ? 'Review and import the existing configuration before planning a network change.'
-      : 'Resolve the conflicting identity or unowned provider resources before planning.';
-  if (!view.container.identity)
-    return 'Container generation is unverified. Add a unique container-dashboard-generation UUID marker in its Proxmox description.';
-  if (
-    data.operations.some(
-      (o) => o.key === view.container.key && o.status !== 'succeeded',
-    )
-  )
-    return 'An incomplete network operation needs recovery in Activity.';
-  return '';
-}
-export function importBlocked(
-  view: ContainerView,
-  data: Reconciliation,
-  jobs: Job[],
-  activityLoaded: boolean,
-  jobAttemptState?: JobAttemptState,
-): string {
-  const c = view.container;
-  const observedAt = Date.parse(data.inventory.observedAt);
-  if (
-    view.stale ||
-    !data.inventory.complete ||
-    !Number.isFinite(observedAt) ||
-    Date.now() - observedAt > 5 * 60 * 1000
-  )
-    return 'Current complete inventory is required. Refresh before reviewing an import.';
-  if (!c.identity)
-    return 'Container generation is unverified. Complete identity enrollment and refresh before import.';
-  if (!view.host || !view.firewall || !c.ip || !c.mac || c.template)
-    return 'A verified container, address and linked host/firewall profile are required before import.';
-  const profiles = [view.host, ...(view.host.addressProfiles ?? [])];
-  if (
-    !profiles.some(
-      (profile) => c.vmid >= profile.vmidMin && c.vmid <= profile.vmidMax,
-    ) ||
-    (c.expectedIp && c.expectedIp !== c.ip) ||
-    (c.expectedMac && c.expectedMac.toLowerCase() !== c.mac.toLowerCase()) ||
-    view.item?.issues.some(
-      (issue) =>
-        issue.includes('does not match') && issue.includes('host profile'),
-    )
-  )
-    return 'Container addresses do not match the configured host profile. Resolve the mismatch before import.';
-  if (!activityLoaded)
-    return 'Current activity history is required. Refresh Activity before reviewing an import.';
-  if (
-    jobAttemptState ||
-    jobs.some(
-      (job) => job.key === c.key && (activeJob(job) || uncertainJob(job)),
-    )
-  )
-    return 'An update is active or needs outcome inspection in Activity before import.';
-  if (
-    data.operations.some(
-      (operation) =>
-        operation.key === c.key && operation.status !== 'succeeded',
-    )
-  )
-    return 'An incomplete network operation needs recovery in Activity before import.';
-  if (
-    !view.item?.importAvailable ||
-    view.item.owned ||
-    view.item.state === 'unknown' ||
-    !view.item.existingRoute ||
-    !view.item.existingResources?.length ||
-    view.item.importIssues?.length
-  )
-    return (
-      view.item?.importIssues?.join(' ') ||
-      'No unambiguous matching configuration is available for import. Inspect the existing records and refresh.'
-    );
-  return '';
 }
 export function formatTime(value: string): string {
   const date = new Date(value);

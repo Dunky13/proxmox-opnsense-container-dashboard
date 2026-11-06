@@ -12,7 +12,14 @@ import { Api } from '../src/api';
 import { App } from '../src/App';
 import { useDashboard } from '../src/use-dashboard';
 import type { ReconcileItem } from '../src/schemas';
-import { auth, job, partial, reconciliation, settings } from './fixtures';
+import {
+  auth,
+  job,
+  partial,
+  reconciliation,
+  settings,
+  withIssues,
+} from './fixtures';
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => {};
@@ -67,7 +74,7 @@ it.each(['pending', 'failed', 'empty'])(
           key: 'main:608',
           state: 'ownedOrphan',
           owned: true,
-          issues: ['Container is absent.'],
+          ...withIssues('ownedOrphan', ['Container is absent.']),
         },
       ],
       operations: [

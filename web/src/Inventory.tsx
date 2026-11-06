@@ -11,22 +11,41 @@ import {
   SquaresFour,
 } from '@phosphor-icons/react';
 import { Api } from './api';
-import type { Job, Reconciliation, Settings } from './schemas';
+import type {
+  Job,
+  MaintenanceReadiness,
+  Reconciliation,
+  Settings,
+} from './schemas';
 import { ContainerDetail } from './ContainerDetail';
 import { ContainerIssueSummary } from './ContainerIssues';
 import { AppIcon, Badge, Empty, Field, Notice, Status } from './ui';
+import { eligibility, reasonOf, type ActionEligibility } from './eligibility';
 import {
+  attemptKey,
   emptyFilters,
   filterViews,
   formatTime,
+  mismatchCounts,
   stateLabel,
-  updateBlocked,
+  type ConfigurationFilter,
   type ContainerView,
   type Filters,
   type JobAttemptState,
 } from './viewmodel';
 
 export type ViewMode = 'cards' | 'rows';
+const configurationFilters: { value: ConfigurationFilter; label: string }[] = [
+  { value: '', label: 'All records' },
+  { value: 'needsReview', label: 'Needs review' },
+  { value: 'notConfigured', label: 'Not configured' },
+  {
+    value: 'reservationOnly',
+    label: 'Existing reservation, proxy not configured',
+  },
+  { value: 'importAvailable', label: 'Import available' },
+  { value: 'unverified', label: 'Unverified' },
+];
 export function InventoryView({
   api,
   settings,
@@ -70,9 +89,26 @@ export function InventoryView({
   const [jobAttempts, setJobAttempts] = useState<Map<string, JobAttemptState>>(
     () => new Map(),
   );
-  const filtered = filterViews(views, filters);
+  // Readiness checks live here, like update attempts, so cards, rows and the
+  // inspector evaluate the same facts.
+  const [readiness, setReadiness] = useState<Map<string, MaintenanceReadiness>>(
+    () => new Map(),
+  );
+  const filtered = filterViews(views, filters, data);
   const current = views.find((view) => view.container.key === selected);
-  const mismatches = data.items.filter((item) => item.state !== 'healthy');
+  const review = mismatchCounts(data).needsReview;
+  const now = Date.now();
+  const actionsFor = (view: ContainerView) => {
+    const key = attemptKey(view.container);
+    return eligibility(view, {
+      data,
+      jobs,
+      activityLoaded,
+      jobAttemptState: jobAttempts.get(key),
+      readiness: readiness.get(key),
+      now,
+    });
+  };
   return (
     <div className="inventory-page">
       <div className="page-heading">
@@ -91,9 +127,9 @@ export function InventoryView({
             · Observed {formatTime(data.inventory.observedAt)}
           </p>
         </div>
-        {mismatches.length > 0 && (
+        {review > 0 && (
           <button className="button warning-text" onClick={onMismatches}>
-            {mismatches.length} need review
+            {review} need review
             <ArrowRight size={16} />
           </button>
         )}
@@ -223,6 +259,27 @@ export function InventoryView({
                 </select>
               )}
             </Field>
+            <Field label="Configuration">
+              {(id) => (
+                <select
+                  id={id}
+                  value={filters.configuration}
+                  onChange={(event) => {
+                    const value = configurationFilters.find(
+                      (filter) => filter.value === event.target.value,
+                    );
+                    if (value)
+                      setFilters({ ...filters, configuration: value.value });
+                  }}
+                >
+                  {configurationFilters.map((filter) => (
+                    <option key={filter.value} value={filter.value}>
+                      {filter.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
             <Field label="Exposure">
               {(id) => (
                 <select
@@ -335,11 +392,7 @@ export function InventoryView({
                               view={view}
                               mode={mode}
                               selected={view.container.key === selected}
-                              jobs={jobs}
-                              activityLoaded={activityLoaded}
-                              jobAttemptState={jobAttempts.get(
-                                `${view.container.key}:${view.container.identity}`,
-                              )}
+                              actions={actionsFor(view)}
                               onSelect={(trigger, kind) => {
                                 selectionTrigger.current = trigger;
                                 setRequestedJob(
@@ -383,14 +436,22 @@ export function InventoryView({
                 onJobReviewRequest={(kind) =>
                   setRequestedJob({ key: current.container.key, kind })
                 }
-                jobAttemptState={jobAttempts.get(
-                  `${current.container.key}:${current.container.identity}`,
-                )}
+                jobAttemptState={jobAttempts.get(attemptKey(current.container))}
                 onJobAttemptState={(state) =>
                   setJobAttempts((previous) => {
                     const next = new Map(previous);
-                    const key = `${current.container.key}:${current.container.identity}`;
+                    const key = attemptKey(current.container);
                     if (state) next.set(key, state);
+                    else next.delete(key);
+                    return next;
+                  })
+                }
+                readiness={readiness.get(attemptKey(current.container)) ?? null}
+                onReadiness={(result) =>
+                  setReadiness((previous) => {
+                    const next = new Map(previous);
+                    const key = attemptKey(current.container);
+                    if (result) next.set(key, result);
                     else next.delete(key);
                     return next;
                   })
@@ -417,27 +478,19 @@ function ContainerRecord({
   mode,
   selected,
   onSelect,
-  jobs,
-  activityLoaded,
-  jobAttemptState,
+  actions,
 }: {
   view: ContainerView;
   mode: ViewMode;
   selected: boolean;
   onSelect: (trigger: HTMLButtonElement, kind?: Job['kind']) => void;
-  jobs: Job[];
-  activityLoaded: boolean;
-  jobAttemptState?: JobAttemptState;
+  actions: ActionEligibility;
 }) {
   const c = view.container;
   const maintenance = (['appUpdate', 'osUpdate'] satisfies Job['kind'][]).map(
     (kind) => ({
       kind,
-      reason: jobAttemptState
-        ? 'Inspect the previous update request in container details before another review.'
-        : activityLoaded
-          ? updateBlocked(view, jobs, kind)
-          : 'Maintenance status is loading. Refresh Activity if it remains unavailable.',
+      reason: reasonOf(actions[kind]),
       label: kind === 'appUpdate' ? 'App update' : 'OS update',
     }),
   );

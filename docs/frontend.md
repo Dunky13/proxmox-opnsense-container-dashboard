@@ -56,7 +56,8 @@ Keep `DASHBOARD_WEB_URL` set when targeting the embedded binary. The demo suite 
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `src/schemas.ts`, `src/api.ts`                    | Zod response boundaries, authentication headers, sanitized transport errors                    |
 | `src/use-dashboard.ts`                            | Initial loading, retained stale data, explicit refresh and bounded active-work polling         |
-| `src/viewmodel.ts`                                | Shared container identity, search, filters, status labels and action exclusions                |
+| `src/viewmodel.ts`                                | Shared container identity, search, filters, status labels, review scope and mismatch counts    |
+| `src/eligibility.ts`                              | The one decision of whether each action is allowed, with a single reason when it is not        |
 | `src/Inventory.tsx`, `src/ContainerDetail.tsx`    | Cards/Rows, host context, one network configuration and maintenance owner                      |
 | `src/Mismatches.tsx`                              | Unknown/conflict/missing/drift/orphan review with protected cleanup                            |
 | `src/Activity.tsx`                                | Durable operations, sanitized job phases and explicit supported recovery                       |

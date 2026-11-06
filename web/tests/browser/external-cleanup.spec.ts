@@ -155,7 +155,8 @@ async function openMismatches(page: Page) {
   await page.goto('/');
   const menu = page.getByRole('button', { name: 'Open navigation' });
   if (await menu.isVisible()) await menu.click();
-  await page.getByRole('button', { name: 'Mismatches', exact: true }).click();
+  // The nav badge now counts protected candidates, so the name has a count suffix.
+  await page.getByRole('button', { name: /^Mismatches( \d+)?$/ }).click();
 }
 
 test('external cleanup at matching desktop/mobile sizes and themes', async ({

@@ -58,15 +58,19 @@ export function retainObservations(
     },
     items: [...items.values()].map((item): ReconcileItem => {
       if (!failed.has(item.key.split(':')[0] ?? '')) return item;
+      const staleIssue =
+        'Current host inventory is incomplete; previous observations are display only.';
+      const known = item.issues.includes(staleIssue);
       return {
         ...item,
         state: 'unknown',
-        issues: [
-          ...new Set([
-            ...item.issues,
-            'Current host inventory is incomplete; previous observations are display only.',
-          ]),
-        ],
+        issues: known ? item.issues : [...item.issues, staleIssue],
+        issueDetails: known
+          ? item.issueDetails
+          : [
+              ...item.issueDetails,
+              { code: 'readIncomplete', message: staleIssue },
+            ],
       };
     }),
   };
