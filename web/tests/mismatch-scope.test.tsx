@@ -153,7 +153,18 @@ describe('review scope and counts', () => {
     ['owned mismatch', { state: 'mismatch' }, 'needsReview'],
     ['owned orphan', { state: 'ownedOrphan' }, 'needsReview'],
   ])('%s is %s', (_name, patch, scope) => {
-    expect(reviewScope(item(patch))).toBe(scope);
+    expect(reviewScope(item(patch), { operations: [] })).toBe(scope);
+  });
+
+  it('keeps an unfinished operation counted when its host read later fails', () => {
+    const unknown = item({ state: 'unknown' });
+    expect(reviewScope(unknown, { operations: [] })).toBe('unverified');
+    expect(reviewScope(unknown, { operations: [partial] })).toBe('needsReview');
+    expect(
+      reviewScope(unknown, {
+        operations: [{ ...partial, status: 'succeeded' }],
+      }),
+    ).toBe('unverified');
   });
 
   it('counts stale and drifted records and eligible protected candidates only', () => {

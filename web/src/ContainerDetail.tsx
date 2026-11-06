@@ -24,6 +24,7 @@ import {
   currentReadiness,
   eligibility,
   reasonOf,
+  readinessFreshnessMs,
   type ActionId,
   type EligibilityContext,
 } from './eligibility';
@@ -31,8 +32,7 @@ import {
   formatTime,
   type ContainerView,
   type JobAttemptState,
-  activeJob,
-  uncertainJob,
+  busyJob,
 } from './viewmodel';
 
 export function PlanReview({
@@ -653,7 +653,8 @@ export function ContainerDetail({
   const [checkingMaintenance, setCheckingMaintenance] = useState(false);
   useEffect(() => {
     if (!readiness) return;
-    const remaining = Date.parse(readiness.observedAt) + 60000 - Date.now();
+    const remaining =
+      Date.parse(readiness.observedAt) + readinessFreshnessMs - Date.now();
     if (!Number.isFinite(remaining) || remaining <= 0) {
       onReadiness(null);
       return;
@@ -973,7 +974,9 @@ export function ContainerDetail({
                 ? 'Observations changed after review. Close this plan and review refreshed state.'
                 : plan.action === 'reservation'
                   ? reservationBlock
-                  : block
+                  : plan.action === 'accept'
+                    ? reasonOf(actions.accept)
+                    : block
           }
           onDone={async () => {
             if (plan.action === 'import') {
@@ -1134,7 +1137,7 @@ export function ContainerDetail({
               disabled={
                 jobAttemptState === 'requesting' ||
                 !activityLoaded ||
-                containerJobs.some((job) => activeJob(job) || uncertainJob(job))
+                busyJob(jobs, view.container.key)
               }
               onClick={() => {
                 onJobAttemptState(null);

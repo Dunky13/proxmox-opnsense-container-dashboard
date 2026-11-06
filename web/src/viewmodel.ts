@@ -30,9 +30,14 @@ export type ReviewScope =
   | 'reservationOnly'
   | 'importAvailable'
   | 'unverified';
-export type ConfigurationFilter =
-  '' | 'needsReview' | 'notConfigured' | 'reservationOnly' | 'importAvailable';
-export function reviewScope(item: ReconcileItem): ReviewScope {
+export type ConfigurationFilter = '' | Exclude<ReviewScope, 'ok'>;
+export function reviewScope(
+  item: ReconcileItem,
+  data: Pick<Reconciliation, 'operations'>,
+): ReviewScope {
+  // An unfinished operation stays a review item even when a failed host read
+  // later turns the record into unknown.
+  if (unfinishedOperation(data, item.key)) return 'needsReview';
   if (item.state === 'healthy') return 'ok';
   if (item.state === 'unknown') return 'unverified';
   if (!item.owned && item.state === 'missing') return 'notConfigured';
@@ -52,8 +57,8 @@ export const eligibleProtected = (data: Reconciliation) =>
   data.protectedCandidates?.filter((c) => c.eligible === true).length ?? 0;
 export const informationalProtected = (data: Reconciliation) =>
   (data.protectedCandidates?.length ?? 0) - eligibleProtected(data);
-// The one place that counts records, so the sidebar badge, the inventory
-// button and the Mismatches page cannot disagree.
+// Every surface classifies records with reviewScope, so the sidebar badge, the
+// inventory button and the Mismatches groups cannot disagree.
 export function mismatchCounts(data: Reconciliation): MismatchCounts {
   const counts: MismatchCounts = {
     needsReview: eligibleProtected(data),
@@ -63,7 +68,7 @@ export function mismatchCounts(data: Reconciliation): MismatchCounts {
     unverified: 0,
   };
   for (const item of data.items) {
-    const scope = reviewScope(item);
+    const scope = reviewScope(item, data);
     if (scope !== 'ok') counts[scope] += 1;
   }
   return counts;
@@ -168,6 +173,7 @@ export function containerViews(
 export function filterViews(
   views: ContainerView[],
   filters: Filters,
+  data: Pick<Reconciliation, 'operations'>,
 ): ContainerView[] {
   const words = filters.query
     .trim()
@@ -185,7 +191,7 @@ export function filterViews(
           : v.container.distribution === filters.distribution)) &&
       (!filters.exposure || v.exposure === filters.exposure) &&
       (!filters.configuration ||
-        (!!v.item && reviewScope(v.item) === filters.configuration)),
+        (!!v.item && reviewScope(v.item, data) === filters.configuration)),
   );
 }
 export function stateLabel(state: string): string {
@@ -228,17 +234,47 @@ export function vmidOutsideProfiles(view: ContainerView): boolean {
 }
 // Inventory older than this is display only; App invalidates it and the
 // eligibility rules re-check it at evaluation time.
-export const inventoryFreshnessMs = 5 * 60 * 1000;
+const inventoryFreshnessMs = 5 * 60 * 1000;
 export function inventoryExpired(observedAt: string, now: number): boolean {
   const observed = Date.parse(observedAt);
   return !Number.isFinite(observed) || now - observed > inventoryFreshnessMs;
 }
+// Mirrors the append-only codes in internal/dashboard/reconcile.go. The schema
+// keeps codes as text so a newer server still parses; this type catches typos.
+export type IssueCode =
+  | 'readIncomplete'
+  | 'routeUnavailable'
+  | 'subnetUnresolved'
+  | 'subnetChanged'
+  | 'identityChanged'
+  | 'ownedChanged'
+  | 'hostProfileMismatch'
+  | 'routeLayoutChanged'
+  | 'foreignReferences'
+  | 'routeSpecInvalid'
+  | 'sharedAccessListChanged'
+  | 'ownedMissing'
+  | 'ownedDiffers'
+  | 'unownedConflict'
+  | 'notConfigured'
+  | 'importBlocker'
+  | 'operationIncomplete'
+  | 'vmidReused'
+  | 'prerequisitesMissing'
+  | 'cleanupConflict'
+  | 'ownedOrphan';
 export function hasIssueCode(
   item: ReconcileItem | undefined,
-  code: string,
+  code: IssueCode,
 ): boolean {
   return !!item?.issueDetails.some((detail) => detail.code === code);
 }
+export const unfinishedOperation = (
+  data: Pick<Reconciliation, 'operations'>,
+  key: string,
+) => data.operations.some((o) => o.key === key && o.status !== 'succeeded');
+export const busyJob = (jobs: Job[], key: string) =>
+  jobs.some((j) => j.key === key && (activeJob(j) || uncertainJob(j)));
 export function activeJob(job: Job): boolean {
   return job.status === 'queued' || job.status === 'running';
 }

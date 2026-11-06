@@ -6,10 +6,10 @@ import type {
   Container,
 } from './schemas';
 import {
-  activeJob,
+  busyJob,
   hasIssueCode,
   inventoryExpired,
-  uncertainJob,
+  unfinishedOperation,
   vmidOutsideProfiles,
   type ContainerView,
   type JobAttemptState,
@@ -66,11 +66,6 @@ export function currentReadiness(
     ? readiness
     : null;
 }
-
-const unfinishedOperation = (data: Reconciliation, key: string) =>
-  data.operations.some((o) => o.key === key && o.status !== 'succeeded');
-const busyJob = (jobs: Job[], key: string) =>
-  jobs.some((j) => j.key === key && (activeJob(j) || uncertainJob(j)));
 
 function networkReason(view: ContainerView, data: Reconciliation): string {
   if (!data.inventory.complete)

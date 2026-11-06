@@ -13,7 +13,12 @@ import { ResourceDrift } from './ResourceDrift';
 import { ExternalCleanup } from './ExternalCleanup';
 import { cleanupEligibility, reasonOf } from './eligibility';
 import { Badge, Empty, Notice, Status } from './ui';
-import { mismatchCounts, reviewScope, type ReviewScope } from './viewmodel';
+import {
+  mismatchCounts,
+  reviewScope,
+  unfinishedOperation,
+  type ReviewScope,
+} from './viewmodel';
 
 export function Mismatches({
   api,
@@ -44,7 +49,7 @@ export function Mismatches({
   }, []);
   const counts = mismatchCounts(data);
   const inGroup = (group: ReviewScope) =>
-    data.items.filter((item) => reviewScope(item) === group);
+    data.items.filter((item) => reviewScope(item, data) === group);
   const items = inGroup('needsReview');
   async function cleanup(item: ReconcileItem) {
     const containerKey = item.key.split(':');
@@ -138,9 +143,7 @@ export function Mismatches({
           const host = settings.hosts.find(
             (h) => h.id === item.key.split(':')[0],
           );
-          const unfinished = data.operations.some(
-            (op) => op.key === item.key && op.status !== 'succeeded',
-          );
+          const unfinished = unfinishedOperation(data, item.key);
           const cleanupVerdict = cleanupEligibility(item, data);
           const canCleanup = cleanupVerdict.allowed;
           return (

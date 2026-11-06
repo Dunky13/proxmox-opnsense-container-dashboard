@@ -242,9 +242,10 @@ func inspectImport(st State, inv Inventory, h Host, o OPNsense, c Container, sna
 			}
 		}
 	}
+	reservationOnly := false
 	if len(reservations) == 1 && len(out.Existing) == 1 {
 		_, exact := reservationMatches(reservations[0], desired)
-		out.ReservationOnly = exact && len(sites) == 0 && len(handles) == 0
+		reservationOnly = exact && len(sites) == 0 && len(handles) == 0
 	}
 	if len(out.Existing) == 0 {
 		return out
@@ -355,6 +356,8 @@ func inspectImport(st State, inv Inventory, h Host, o OPNsense, c Container, sna
 	if len(out.Issues) != 0 {
 		out.Route = nil
 	}
+	// Only the two missing-route blockers are expected; any other blocker is a real conflict.
+	out.ReservationOnly = reservationOnly && len(out.Issues) == 2
 	sort.Slice(out.Existing, func(i, j int) bool {
 		return out.Existing[i].Kind+out.Existing[i].ID < out.Existing[j].Kind+out.Existing[j].ID
 	})

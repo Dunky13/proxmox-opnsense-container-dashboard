@@ -51,6 +51,10 @@ func TestReservationOnlySignal(t *testing.T) {
 			dropHikyo(rows, hikyoChild, hikyoHandle)
 			*rows = append(*rows, Resource{ID: "b1111111-1111-4111-8111-111111111609", Kind: "reservation", Fields: map[string]string{"subnet": hikyoSubnet, "ip_address": "192.168.6.9", "hw_address": "d0:cc:37:00:06:78", "hostname": "other"}})
 		}, false},
+		{"exact reservation in the wrong KEA subnet", func(_ *State, rows *[]Resource) {
+			dropHikyo(rows, hikyoChild, hikyoHandle)
+			changeHikyo(*rows, hikyoReservation, "subnet", "c2222222-2222-4222-8222-222222222222")
+		}, false},
 		{"no matching provider record at all", func(_ *State, rows *[]Resource) {
 			dropHikyo(rows, hikyoReservation, hikyoChild, hikyoHandle)
 		}, false},

@@ -44,6 +44,7 @@ const configurationFilters: { value: ConfigurationFilter; label: string }[] = [
     label: 'Existing reservation, proxy not configured',
   },
   { value: 'importAvailable', label: 'Import available' },
+  { value: 'unverified', label: 'Unverified' },
 ];
 export function InventoryView({
   api,
@@ -93,7 +94,7 @@ export function InventoryView({
   const [readiness, setReadiness] = useState<Map<string, MaintenanceReadiness>>(
     () => new Map(),
   );
-  const filtered = filterViews(views, filters);
+  const filtered = filterViews(views, filters, data);
   const current = views.find((view) => view.container.key === selected);
   const review = mismatchCounts(data).needsReview;
   const now = Date.now();
