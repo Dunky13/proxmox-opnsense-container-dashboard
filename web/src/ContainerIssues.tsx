@@ -2,6 +2,41 @@ import type { ContainerView } from './viewmodel';
 import { Field } from './ui';
 import { ResourceDrift } from './ResourceDrift';
 
+// Backend appends import blockers to item.issues as well as importIssues, so
+// dedupe across both lists before any rendering.
+function collectIssues(view: ContainerView) {
+  const issues = view.item?.issues ?? [];
+  const resources = view.item?.existingResources ?? [];
+  const importIssues = [...new Set(view.item?.importIssues ?? [])];
+  const warnings = [...new Set([...view.container.warnings, ...issues])].filter(
+    (issue) =>
+      !importIssues.includes(issue) &&
+      (!resources.length || issue !== 'unowned reservation or domain conflicts'),
+  );
+  return { issues, resources, importIssues, warnings };
+}
+
+// Compact card/row summary: first issue clamped to two lines plus a count.
+// Full detail, resources and help live in the inspector.
+export function ContainerIssueSummary({ view }: { view: ContainerView }) {
+  const { warnings, importIssues } = collectIssues(view);
+  const lines = [...warnings, ...importIssues];
+  const more = lines.length - 1;
+  // Always rendered so cards keep a flexible grid row above the actions.
+  return (
+    <div className="issue-summary">
+      {lines.length > 0 && (
+        <p className="issue-summary-line" title={lines[0]}>
+          {lines[0]}
+          {more > 0 && (
+            <span className="issue-summary-more"> · +{more} more</span>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function ContainerIssues({
   view,
   expandedResources = false,
@@ -10,13 +45,7 @@ export function ContainerIssues({
   expandedResources?: boolean;
 }) {
   const c = view.container;
-  const issues = view.item?.issues ?? [];
-  const resources = view.item?.existingResources ?? [];
-  const importIssues = view.item?.importIssues ?? [];
-  const warnings = [...new Set([...c.warnings, ...issues])].filter(
-    (issue) =>
-      !resources.length || issue !== 'unowned reservation or domain conflicts',
-  );
+  const { issues, resources, importIssues, warnings } = collectIssues(view);
   const profileMismatch = issues.some((issue) =>
     [
       'container does not match host profile',
@@ -74,8 +103,8 @@ export function ContainerIssues({
         <div className="import-blockers">
           <strong>Import unavailable</strong>
           <ul className="warnings">
-            {importIssues.map((issue, index) => (
-              <li key={index}>{issue}</li>
+            {importIssues.map((issue) => (
+              <li key={issue}>{issue}</li>
             ))}
           </ul>
         </div>

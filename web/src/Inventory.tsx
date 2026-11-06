@@ -13,11 +13,13 @@ import {
 import { Api } from './api';
 import type { Job, Reconciliation, Settings } from './schemas';
 import { ContainerDetail } from './ContainerDetail';
-import { ContainerIssues } from './ContainerIssues';
+import { ContainerIssueSummary } from './ContainerIssues';
 import { AppIcon, Badge, Empty, Field, Notice, Status } from './ui';
 import {
+  emptyFilters,
   filterViews,
   formatTime,
+  stateLabel,
   updateBlocked,
   type ContainerView,
   type Filters,
@@ -184,7 +186,7 @@ export function InventoryView({
                     .sort()
                     .map((state) => (
                       <option key={state} value={state}>
-                        {state}
+                        {stateLabel(state)}
                       </option>
                     ))}
                 </select>
@@ -258,15 +260,7 @@ export function InventoryView({
                   {views.length > 0 && (
                     <button
                       className="button"
-                      onClick={() =>
-                        setFilters({
-                          query: '',
-                          host: '',
-                          state: '',
-                          distribution: '',
-                          exposure: '',
-                        })
-                      }
+                      onClick={() => setFilters(emptyFilters)}
                     >
                       Clear search and filters
                     </button>
@@ -462,6 +456,7 @@ function ContainerRecord({
             onClick={(event) => onSelect(event.currentTarget)}
             aria-pressed={selected}
             aria-label={`Inspect ${c.name}, VMID ${c.vmid}`}
+            title={c.name}
           >
             {c.name}
           </button>
@@ -470,17 +465,18 @@ function ContainerRecord({
             {c.template ? ' · Template' : ''}
           </span>
         </div>
-        <Status value={c.status} />
+        {mode === 'cards' && <Status value={c.status} />}
       </div>
       <div className="record-network">
         <code>{c.ip || 'IP unknown'}</code>
         <code className="record-mac">{c.mac || 'MAC unknown'}</code>
       </div>
       <div className="record-distro">{view.distribution}</div>
-      {mode === 'cards' && (
-        <p className="record-domain">{view.domain || 'Domain unavailable'}</p>
-      )}
+      <p className="record-domain" title={view.domain || undefined}>
+        {view.domain || 'Domain unavailable'}
+      </p>
       <div className="record-state">
+        {mode === 'rows' && <Status value={c.status} />}
         {view.exposure !== 'Not configured' && (
           <Badge tone={view.exposure === 'Public' ? 'warning' : 'neutral'}>
             {view.exposure}
@@ -492,47 +488,43 @@ function ContainerRecord({
           <Status value={view.item?.state ?? 'unknown'} />
         )}
       </div>
-      <ContainerIssues view={view} />
-      {mode === 'cards' && (
-        <div className="record-maintenance">
-          {maintenance.map(({ kind, reason, label }) => {
-            return (
-              <div key={kind}>
-                <button
-                  className="button"
-                  disabled={!!reason}
-                  aria-describedby={
-                    reason ? `maintenance-status-${c.key}` : undefined
-                  }
-                  aria-label={`Review ${label.toLowerCase()} ${c.name}, VMID ${c.vmid}`}
-                  onClick={(event) => onSelect(event.currentTarget, kind)}
-                >
-                  {kind === 'appUpdate' ? (
-                    <ArrowUp size={15} />
-                  ) : (
-                    <HardDrives size={15} />
-                  )}
-                  {label}
-                </button>
-              </div>
-            );
-          })}
-          {maintenanceReasons.length > 0 && (
-            <p id={`maintenance-status-${c.key}`} className="disabled-reason">
-              {maintenanceReasons.join(' ')}
-            </p>
-          )}
-        </div>
-      )}
-      <button
-        className="button record-configure"
-        onClick={(event) => onSelect(event.currentTarget)}
-        aria-label={`Configure ${c.name}, VMID ${c.vmid}`}
-      >
-        <Cube size={15} />
-        Configure
-        <ArrowRight size={14} />
-      </button>
+      <ContainerIssueSummary view={view} />
+      <div className="record-actions">
+        {maintenance.map(({ kind, reason, label }) => (
+          <button
+            key={kind}
+            className="button"
+            disabled={!!reason}
+            aria-describedby={reason ? `maintenance-status-${c.key}` : undefined}
+            aria-label={`Review ${label.toLowerCase()} ${c.name}, VMID ${c.vmid}`}
+            onClick={(event) => onSelect(event.currentTarget, kind)}
+          >
+            {kind === 'appUpdate' ? (
+              <ArrowUp size={15} />
+            ) : (
+              <HardDrives size={15} />
+            )}
+            {label}
+          </button>
+        ))}
+        <button
+          className="button record-configure"
+          onClick={(event) => onSelect(event.currentTarget)}
+          aria-label={`Configure ${c.name}, VMID ${c.vmid}`}
+        >
+          <Cube size={15} />
+          Configure
+        </button>
+        {maintenanceReasons.length > 0 && (
+          <p
+            id={`maintenance-status-${c.key}`}
+            className="disabled-reason"
+            title={maintenanceReasons.join(' ')}
+          >
+            {maintenanceReasons.join(' ')}
+          </p>
+        )}
+      </div>
     </article>
   );
 }
