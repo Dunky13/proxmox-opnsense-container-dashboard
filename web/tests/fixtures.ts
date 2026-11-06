@@ -7,6 +7,16 @@ import type {
   Reconciliation,
   Settings,
 } from '../src/schemas';
+// Pairs each issue's prose with its stable code, as the server sends them.
+export function withIssues(code: string | string[], issues: string[]) {
+  return {
+    issues,
+    issueDetails: issues.map((message, i) => ({
+      code: typeof code === 'string' ? code : (code[i] ?? ''),
+      message,
+    })),
+  };
+}
 export const auth: AuthStatus = {
   demo: true,
   authenticated: true,
@@ -158,15 +168,17 @@ export const reconciliation: Reconciliation = {
       key: 'main:604',
       state: 'healthy',
       owned: true,
-      issues: [],
+      ...withIssues('', []),
       desiredRoute: container.desiredRoute,
     },
-    { key: 'main:606', state: 'healthy', owned: true, issues: [] },
+    { key: 'main:606', state: 'healthy', owned: true, ...withIssues('', []) },
     {
       key: 'pvedell:701',
       state: 'missing',
       owned: false,
-      issues: ['Dashboard-owned reservation and proxy are missing.'],
+      ...withIssues('notConfigured', [
+        'Dashboard-owned reservation and proxy are missing.',
+      ]),
     },
   ],
   operations: [],

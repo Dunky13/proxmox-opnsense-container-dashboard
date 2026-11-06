@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { expect, it } from 'vitest';
 import { ContainerIssues } from '../src/ContainerIssues';
 import { containerViews } from '../src/viewmodel';
-import { container, reconciliation, settings } from './fixtures';
+import { container, reconciliation, settings, withIssues } from './fixtures';
 
 for (const ct of [
   {
@@ -58,7 +58,9 @@ for (const ct of [
             key: `main:${ct.vmid}`,
             state: 'conflict',
             owned: false,
-            issues: ['container does not match host profile'],
+            ...withIssues('hostProfileMismatch', [
+              'container does not match host profile',
+            ]),
           },
         ],
       },
@@ -111,10 +113,13 @@ it('preserves foreign-resource conflict reasons without inventing a profile mism
           key: container.key,
           state: 'conflict',
           owned: false,
-          issues: [
-            'unowned reservation or domain conflicts',
-            'container identity changed or unavailable',
-          ],
+          ...withIssues(
+            ['unownedConflict', 'identityChanged'],
+            [
+              'unowned reservation or domain conflicts',
+              'container identity changed or unavailable',
+            ],
+          ),
         },
       ],
     },

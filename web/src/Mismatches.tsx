@@ -11,7 +11,9 @@ import {
 import { PlanReview } from './ContainerDetail';
 import { ResourceDrift } from './ResourceDrift';
 import { ExternalCleanup } from './ExternalCleanup';
+import { cleanupEligibility, reasonOf } from './eligibility';
 import { Badge, Empty, Notice, Status } from './ui';
+import { mismatchCounts, reviewScope, type ReviewScope } from './viewmodel';
 
 export function Mismatches({
   api,
@@ -40,7 +42,10 @@ export function Mismatches({
       alive.current = false;
     };
   }, []);
-  const items = data.items.filter((item) => item.state !== 'healthy');
+  const counts = mismatchCounts(data);
+  const inGroup = (group: ReviewScope) =>
+    data.items.filter((item) => reviewScope(item) === group);
+  const items = inGroup('needsReview');
   async function cleanup(item: ReconcileItem) {
     const containerKey = item.key.split(':');
     const hostId = containerKey[0];
@@ -101,13 +106,13 @@ export function Mismatches({
         <div>
           <h1>Mismatches</h1>
           <p>
-            Select stale reservations or proxies, review exact UUIDs, then run
-            cleanup manually. Add missing records from each app's configuration.
+            Stale or drifted records only. Select stale reservations or proxies,
+            review exact UUIDs, then run cleanup manually. Containers that are
+            simply not configured yet, or have an importable existing
+            configuration, are grouped below and are not counted.
           </p>
         </div>
-        <Badge>
-          {items.length + (data.protectedCandidates?.length ?? 0)} need review
-        </Badge>
+        <Badge>{counts.needsReview} need review</Badge>
       </div>
       {!data.inventory.complete && (
         <Notice>
@@ -115,11 +120,12 @@ export function Mismatches({
           orphans or cleaned up.
         </Notice>
       )}
-      {items.length === 0 && !data.protectedCandidates?.length && (
-        <Empty title="No configuration mismatches">
+      {counts.needsReview === 0 && (
+        <Empty title="No stale or drifted records">
           <p>
-            The latest observed inventory matches dashboard-owned resources.
-            Refresh to check for new provider changes.
+            No dashboard-owned resource is stale, changed, missing or in
+            conflict in the latest observed inventory. Refresh to check for new
+            provider changes.
           </p>
         </Empty>
       )}
@@ -134,11 +140,8 @@ export function Mismatches({
           const unfinished = data.operations.some(
             (op) => op.key === item.key && op.status !== 'succeeded',
           );
-          const canCleanup =
-            (item.state === 'ownedOrphan' || item.cleanupSelectable === true) &&
-            item.owned &&
-            data.inventory.complete &&
-            !unfinished;
+          const cleanupVerdict = cleanupEligibility(item, data);
+          const canCleanup = cleanupVerdict.allowed;
           return (
             <article className="mismatch-entry" key={item.key}>
               <div className="section-heading">
@@ -234,17 +237,39 @@ export function Mismatches({
                 )}
               </div>
               {!container && !canCleanup && (
-                <p className="disabled-reason">
-                  Cleanup requires a confirmed owned orphan, complete fresh
-                  inventory and no incomplete operation. Unknown, conflicting
-                  and ambiguous records are protected. Eligible unowned records
-                  have a separate acknowledged review below.
-                </p>
+                <p className="disabled-reason">{reasonOf(cleanupVerdict)}</p>
               )}
             </article>
           );
         })}
       </div>
+      <SetupGroup
+        title="Not configured"
+        description="No reservation or proxy exists yet. This is a starting point, not drift."
+        action="Configure"
+        items={inGroup('notConfigured')}
+        data={data}
+        settings={settings}
+        onInspect={onInspect}
+      />
+      <SetupGroup
+        title="Import available"
+        description="An unambiguous existing configuration can be reviewed and imported. Nothing is imported automatically."
+        action="Review existing configuration"
+        items={inGroup('importAvailable')}
+        data={data}
+        settings={settings}
+        onInspect={onInspect}
+      />
+      <SetupGroup
+        title="Unverified"
+        description="Provider state could not be read, so these records are neither confirmed nor ruled out. Refresh to verify."
+        action="Inspect"
+        items={inGroup('unverified')}
+        data={data}
+        settings={settings}
+        onInspect={onInspect}
+      />
       <ExternalCleanup api={api} data={data} onRefresh={onRefresh} />
       {error && (
         <Notice tone="danger" role="alert">
@@ -266,5 +291,61 @@ export function Mismatches({
         />
       )}
     </div>
+  );
+}
+
+function SetupGroup({
+  title,
+  description,
+  action,
+  items,
+  data,
+  settings,
+  onInspect,
+}: {
+  title: string;
+  description: string;
+  action: string;
+  items: ReconcileItem[];
+  data: Reconciliation;
+  settings: Settings;
+  onInspect: (key: string) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <section className="setup-group" aria-label={title}>
+      <div className="title-line">
+        <h2>{title}</h2>
+        <Badge>{items.length}</Badge>
+      </div>
+      <p className="muted">{description}</p>
+      <ul className="setup-list">
+        {items.map((item) => {
+          const container = data.inventory.containers.find(
+            (c) => c.key === item.key,
+          );
+          const host = settings.hosts.find(
+            (h) => h.id === item.key.split(':')[0],
+          );
+          return (
+            <li key={item.key}>
+              <div>
+                <strong>{container?.name || item.key}</strong>
+                <span className="muted">
+                  {host?.name || item.key.split(':')[0]}
+                  {container ? ` · VMID ${container.vmid}` : ''}
+                </span>
+              </div>
+              {container && (
+                <button className="button" onClick={() => onInspect(item.key)}>
+                  {action}
+                  <ArrowRight size={16} />
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

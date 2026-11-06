@@ -1,4 +1,9 @@
-import type { ContainerView } from './viewmodel';
+import {
+  addressProfiles,
+  hasIssueCode,
+  vmidOutsideProfiles,
+  type ContainerView,
+} from './viewmodel';
 import { Field } from './ui';
 import { ResourceDrift } from './ResourceDrift';
 
@@ -12,12 +17,9 @@ function collectIssues(view: ContainerView) {
   const resources = view.item?.existingResources ?? [];
   const importIssues = [...new Set(view.item?.importIssues ?? [])];
   const warnings = [...new Set([...view.container.warnings, ...issues])].filter(
-    (issue) =>
-      !importIssues.includes(issue) &&
-      (!resources.length ||
-        issue !== 'unowned reservation or domain conflicts'),
+    (issue) => !importIssues.includes(issue),
   );
-  return { issues, resources, importIssues, warnings };
+  return { resources, importIssues, warnings };
 }
 
 // Compact card/row summary: first issue clamped to two lines plus a count.
@@ -53,21 +55,10 @@ export function ContainerIssues({
   expandedResources?: boolean;
 }) {
   const c = view.container;
-  const { issues, resources, importIssues, warnings } = collectIssues(view);
-  const profileMismatch = issues.some((issue) =>
-    [
-      'container does not match host profile',
-      'container does not match configured host profile',
-    ].includes(issue),
-  );
-  const profiles = view.host
-    ? [view.host, ...(view.host.addressProfiles ?? [])]
-    : [];
-  const outsideRange =
-    profiles.length > 0 &&
-    !profiles.some(
-      (profile) => c.vmid >= profile.vmidMin && c.vmid <= profile.vmidMax,
-    );
+  const { resources, importIssues, warnings } = collectIssues(view);
+  const profileMismatch = hasIssueCode(view.item, 'hostProfileMismatch');
+  const profiles = addressProfiles(view);
+  const outsideRange = vmidOutsideProfiles(view);
   if (
     !warnings.length &&
     !resources.length &&

@@ -1,5 +1,11 @@
 import { expect, test } from '@playwright/test';
-import { auth, container, reconciliation, settings } from '../fixtures';
+import {
+  auth,
+  container,
+  reconciliation,
+  settings,
+  withIssues,
+} from '../fixtures';
 
 const evidenceDir = process.env.DASHBOARD_EVIDENCE_DIR || '../.local/evidence';
 const legacy = [
@@ -44,13 +50,17 @@ const data = {
       key: `main:${ct.vmid}`,
       state: 'conflict',
       owned: false,
-      issues: ['container does not match host profile'],
+      ...withIssues('hostProfileMismatch', [
+        'container does not match host profile',
+      ]),
     })),
     {
       key: container.key,
       state: 'conflict',
       owned: false,
-      issues: ['unowned reservation or domain conflicts'],
+      ...withIssues('unownedConflict', [
+        'unowned reservation or domain conflicts',
+      ]),
     },
   ],
 };

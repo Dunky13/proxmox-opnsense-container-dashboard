@@ -10,9 +10,24 @@ import {
   containerViews,
   emptyFilters,
   filterViews,
-  updateBlocked,
+  type ContainerView,
 } from '../src/viewmodel';
+import { eligibility, reasonOf } from '../src/eligibility';
 import { container, reconciliation, settings } from './fixtures';
+
+const updateBlocked = (
+  view: ContainerView,
+  jobs: Parameters<typeof eligibility>[1]['jobs'],
+  kind: 'appUpdate' | 'osUpdate',
+) =>
+  reasonOf(
+    eligibility(view, {
+      data: reconciliation,
+      jobs,
+      activityLoaded: true,
+      now: Date.now(),
+    })[kind],
+  );
 
 describe('API boundaries', () => {
   it('accepts Go null slices without accepting malformed or missing data', () => {
@@ -111,6 +126,7 @@ describe('shared inventory view model', () => {
         state: 'running',
         distribution: 'debian',
         exposure: 'LAN / VPN',
+        configuration: '',
       }).map((v) => v.container.key),
     ).toEqual(['main:604']);
     expect(

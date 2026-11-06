@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { auth, container, plan, reconciliation, settings } from '../fixtures';
+import {
+  auth,
+  container,
+  plan,
+  reconciliation,
+  settings,
+  withIssues,
+} from '../fixtures';
 
 const baseline = process.env.DASHBOARD_MAINTENANCE_BASELINE === '1';
 const evidence = process.env.DASHBOARD_EVIDENCE_DIR || '../.local/evidence';
@@ -49,7 +56,9 @@ test('synthetic Hikyo blocked-maintenance flow at matching sizes and system them
                     key: ct.key,
                     state: reservationConflict ? 'conflict' : 'mismatch',
                     owned: !reservationConflict,
-                    issues: ['owned resources changed or are missing'],
+                    ...withIssues('ownedChanged', [
+                      'owned resources changed or are missing',
+                    ]),
                     reservationBlocked: reservationConflict
                       ? collisionReason
                       : 'owned reservation already exists',
@@ -215,9 +224,8 @@ test('synthetic Hikyo blocked-maintenance flow at matching sizes and system them
       await expect(repair).toHaveAccessibleDescription(
         new RegExp(collisionReason.replace('.', '\\.')),
       );
-      await expect(
-        detail.getByText(collisionReason, { exact: true }),
-      ).toBeVisible();
+      // The server refusal is merged with the client reason into one message.
+      await expect(detail.getByText(collisionReason)).toBeVisible();
       await repair.scrollIntoViewIfNeeded();
     }
     const loadingToast = page.getByRole('button', {
@@ -268,7 +276,7 @@ test('manual orphan selection reviews only selected UUIDs and never retries a lo
                     key: 'main:609',
                     owned: true,
                     state: 'ownedOrphan',
-                    issues: ['Container is absent.'],
+                    ...withIssues('ownedOrphan', ['Container is absent.']),
                     managedResources: [
                       {
                         kind: 'reservation',

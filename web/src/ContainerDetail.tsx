@@ -21,10 +21,14 @@ import {
 } from './schemas';
 import { AppIcon, Badge, Field, Notice, Status } from './ui';
 import {
-  ensureBlocked,
-  importBlocked,
+  currentReadiness,
+  eligibility,
+  reasonOf,
+  type ActionId,
+  type EligibilityContext,
+} from './eligibility';
+import {
   formatTime,
-  updateBlocked,
   type ContainerView,
   type JobAttemptState,
   activeJob,
@@ -391,6 +395,13 @@ export function PlanReview({
   );
 }
 
+const reviewAction = {
+  ensure: 'networkChange',
+  reservation: 'addReservation',
+  import: 'import',
+  accept: 'accept',
+} satisfies Record<string, ActionId>;
+
 export function ContainerDetail({
   view,
   data,
@@ -405,6 +416,8 @@ export function ContainerDetail({
   onJobReviewRequest,
   jobAttemptState,
   onJobAttemptState,
+  readiness,
+  onReadiness,
   onSettings,
 }: {
   onSettings?: () => void;
@@ -421,6 +434,8 @@ export function ContainerDetail({
   onJobReviewRequest: (kind: Job['kind']) => void;
   jobAttemptState?: JobAttemptState;
   onJobAttemptState: (state: JobAttemptState | null) => void;
+  readiness: MaintenanceReadiness | null;
+  onReadiness: (readiness: MaintenanceReadiness | null) => void;
 }) {
   const c = view.container;
   const persisted = c.desiredRoute ?? view.item?.desiredRoute;
@@ -486,27 +501,23 @@ export function ContainerDetail({
       maintenanceReview.current?.scrollIntoView?.({ block: 'nearest' });
     }
   }, [jobToConfirm]);
-  const block = ensureBlocked(view, data);
-  const reservationView: ContainerView = view.item?.canAddReservation
-    ? { ...view, item: { ...view.item, state: 'missing' } }
-    : view;
-  const reservationBlock = view.stale
-    ? 'Refresh current inventory before repairing a reservation.'
-    : ensureBlocked(reservationView, data) ||
-      (view.item?.canAddReservation !== true
-        ? view.item?.reservationBlocked || 'Reservation repair is unavailable.'
-        : '');
-  const reservationRefusal =
-    view.item?.canAddReservation !== true
-      ? view.item?.reservationBlocked
-      : undefined;
-  const importBlock = importBlocked(
-    view,
-    data,
-    jobs,
-    activityLoaded,
-    jobAttemptState,
-  );
+  // Every guard below evaluates this one rule set again at the moment of the
+  // click, so a stale render can never act on an outdated verdict.
+  const evaluate = () => {
+    const context: EligibilityContext = {
+      data,
+      jobs,
+      activityLoaded,
+      jobAttemptState,
+      readiness,
+      now: Date.now(),
+    };
+    return eligibility(view, context);
+  };
+  const actions = evaluate();
+  const block = reasonOf(actions.networkChange);
+  const reservationBlock = reasonOf(actions.addReservation);
+  const importBlock = reasonOf(actions.import);
   const importContext = useRef({ data, block: importBlock });
   importContext.current = { data, block: importBlock };
   const showImport =
@@ -525,12 +536,7 @@ export function ContainerDetail({
   async function review(
     action: 'ensure' | 'import' | 'accept' | 'reservation' = 'ensure',
   ) {
-    if (
-      preparing.current ||
-      plan ||
-      (action === 'import' && importBlock) ||
-      (action === 'reservation' && reservationBlock)
-    )
+    if (preparing.current || plan || !evaluate()[reviewAction[action]].allowed)
       return;
     preparing.current = true;
     const observation = data;
@@ -604,14 +610,7 @@ export function ContainerDetail({
     }
   }
   async function startJob(kind: Job['kind']) {
-    if (
-      jobAttemptConsumed.current ||
-      jobAttemptState ||
-      !activityLoaded ||
-      updateBlocked(maintenanceView, jobs, kind) ||
-      capabilityReason(kind)
-    )
-      return;
+    if (jobAttemptConsumed.current || !evaluate()[kind].allowed) return;
     jobAttemptConsumed.current = true;
     onJobRequestConsumed?.();
     onJobAttemptState('requesting');
@@ -651,50 +650,22 @@ export function ContainerDetail({
       if (alive.current) setJobBusy(false);
     }
   }
-  const [readiness, setReadiness] = useState<MaintenanceReadiness | null>(null);
   const [checkingMaintenance, setCheckingMaintenance] = useState(false);
   useEffect(() => {
     if (!readiness) return;
     const remaining = Date.parse(readiness.observedAt) + 60000 - Date.now();
     if (!Number.isFinite(remaining) || remaining <= 0) {
-      setReadiness(null);
+      onReadiness(null);
       return;
     }
-    const timer = setTimeout(() => {
-      setReadiness((current) => (current === readiness ? null : current));
-    }, remaining);
+    const timer = setTimeout(() => onReadiness(null), remaining);
     return () => clearTimeout(timer);
-  }, [readiness]);
-  const currentReadiness =
-    readiness?.identity === c.identity &&
-    readiness.fingerprint === c.fingerprint &&
-    Date.now() - Date.parse(readiness.observedAt) < 60000
-      ? readiness
-      : null;
-  const maintenanceView: ContainerView = currentReadiness?.connected
-    ? {
-        ...view,
-        container: {
-          ...c,
-          distribution: currentReadiness.distribution,
-          version: currentReadiness.version,
-          distroSource: 'ssh',
-        },
-      }
-    : view;
-  function capabilityReason(kind: Job['kind']) {
-    if (!currentReadiness) return '';
-    return (
-      currentReadiness.reason ||
-      (kind === 'appUpdate'
-        ? currentReadiness.appReason
-        : currentReadiness.osReason)
-    );
-  }
+  }, [readiness, onReadiness]);
+  const fresh = currentReadiness(readiness, c, Date.now());
   async function checkMaintenance() {
-    if (checkingMaintenance) return;
+    if (checkingMaintenance || !evaluate().readinessCheck.allowed) return;
     setCheckingMaintenance(true);
-    setReadiness(null);
+    onReadiness(null);
     setError('');
     try {
       const result = await api.request(
@@ -712,7 +683,7 @@ export function ContainerDetail({
           409,
           'staleMaintenance',
         );
-      if (alive.current) setReadiness(result);
+      if (alive.current) onReadiness(result);
     } catch (err) {
       if (alive.current) setError(messageOf(err instanceof Error ? err : null));
     } finally {
@@ -1027,7 +998,7 @@ export function ContainerDetail({
           <button
             className="button"
             disabled={networkBusy || !!reservationBlock}
-            title={reservationRefusal || reservationBlock || undefined}
+            title={reservationBlock || undefined}
             aria-describedby={
               reservationBlock ? 'reservation-repair-blocker' : undefined
             }
@@ -1049,7 +1020,7 @@ export function ContainerDetail({
           {view.item?.canAcceptChanges && (
             <button
               className="button"
-              disabled={networkBusy || !!block}
+              disabled={networkBusy || !actions.accept.allowed}
               onClick={() => {
                 void review('accept');
               }}
@@ -1060,18 +1031,12 @@ export function ContainerDetail({
         </div>
         {reservationBlock && (
           <p id="reservation-repair-blocker" className="disabled-reason">
-            {reservationRefusal && reservationRefusal !== reservationBlock && (
-              <>
-                <span>{reservationRefusal}</span>
-                <br />
-              </>
-            )}
             {reservationBlock}
           </p>
         )}
-        {view.item?.drift?.length && view.item.acceptBlocked ? (
+        {view.item?.drift?.length && !actions.accept.allowed ? (
           <p className="disabled-reason">
-            Acknowledgement blocked: {view.item.acceptBlocked}
+            Acknowledgement blocked: {actions.accept.reason}
           </p>
         ) : null}
       </section>
@@ -1080,11 +1045,11 @@ export function ContainerDetail({
         <div className="actions">
           <button
             className="button"
-            disabled={
-              checkingMaintenance ||
-              view.stale ||
-              c.status !== 'running' ||
-              !c.identity
+            disabled={checkingMaintenance || !actions.readinessCheck.allowed}
+            aria-describedby={
+              actions.readinessCheck.allowed
+                ? undefined
+                : 'readiness-check-blocker'
             }
             onClick={() => {
               void checkMaintenance();
@@ -1100,31 +1065,32 @@ export function ContainerDetail({
             </button>
           )}
         </div>
+        {!actions.readinessCheck.allowed && (
+          <p id="readiness-check-blocker" className="disabled-reason">
+            {actions.readinessCheck.reason}
+          </p>
+        )}
         <p className="muted">
           Use a dedicated key restricted by the supplied forced-command wrapper.
           Verify the host key, TCP 22 access from the dashboard and server-side
           key paths before enabling SSH. Network drift does not determine update
           availability.
         </p>
-        {currentReadiness && (
+        {fresh && (
           <div role="status">
-            {currentReadiness.connected ? (
+            {fresh.connected ? (
               <p>
-                {currentReadiness.source === 'demo'
+                {fresh.source === 'demo'
                   ? 'Simulated maintenance'
                   : 'SSH connected'}{' '}
-                · {currentReadiness.distribution}{' '}
-                {currentReadiness.version || 'version unavailable'} · source:{' '}
-                {currentReadiness.source === 'ssh'
-                  ? 'SSH'
-                  : currentReadiness.source}{' '}
-                · checked {formatTime(currentReadiness.observedAt)}. App update:{' '}
-                {currentReadiness.appUpdate ? 'available' : 'unavailable'}. OS
-                update:{' '}
-                {currentReadiness.osUpdate ? 'supported' : 'unsupported'}.
+                · {fresh.distribution} {fresh.version || 'version unavailable'}{' '}
+                · source: {fresh.source === 'ssh' ? 'SSH' : fresh.source} ·
+                checked {formatTime(fresh.observedAt)}. App update:{' '}
+                {fresh.appUpdate ? 'available' : 'unavailable'}. OS update:{' '}
+                {fresh.osUpdate ? 'supported' : 'unsupported'}.
               </p>
             ) : (
-              <Notice>{currentReadiness.reason}</Notice>
+              <Notice>{fresh.reason}</Notice>
             )}
           </div>
         )}
@@ -1136,12 +1102,7 @@ export function ContainerDetail({
         </p>
         <div className="actions">
           {(['appUpdate', 'osUpdate'] satisfies Job['kind'][]).map((kind) => {
-            const reason = jobAttemptState
-              ? 'Inspect the previous update request before another review.'
-              : !activityLoaded
-                ? 'Refresh Activity before starting an update; current job state is unavailable.'
-                : updateBlocked(maintenanceView, jobs, kind) ||
-                  capabilityReason(kind);
+            const reason = reasonOf(actions[kind]);
             return (
               <div key={kind}>
                 <button
@@ -1199,12 +1160,7 @@ export function ContainerDetail({
             <div className="actions">
               <button
                 className="button primary"
-                disabled={
-                  jobBusy ||
-                  !activityLoaded ||
-                  !!updateBlocked(maintenanceView, jobs, jobToConfirm) ||
-                  !!capabilityReason(jobToConfirm)
-                }
+                disabled={jobBusy || !actions[jobToConfirm].allowed}
                 onClick={() => {
                   void startJob(jobToConfirm);
                 }}

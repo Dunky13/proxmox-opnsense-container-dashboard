@@ -193,41 +193,55 @@ export const maintenanceSchema = z.object({
   osReason: text,
 });
 export type MaintenanceReadiness = z.infer<typeof maintenanceSchema>;
-export const itemSchema = z.object({
-  cleanupSelectable: z.boolean().optional(),
-  canAddReservation: z.boolean().optional(),
-  reservationBlocked: text.optional(),
-  drift: z.array(driftSchema).optional(),
-  managedResources: z.array(existingResourceSchema).optional(),
-  canAcceptChanges: z.boolean().optional(),
-  acceptBlocked: text.optional(),
-  importAvailable: z.boolean().optional(),
-  importIssues: list(text).optional(),
-  existingRoute: routeSchema.optional(),
-  existingResources: list(
-    z.object({
-      kind: text,
-      id: text,
-      name: text,
-      summary: text,
-    }),
-  ).optional(),
-  routeUnavailable: z.boolean().optional(),
-  key: text,
-  state: z.enum([
-    'missing',
-    'healthy',
-    'mismatch',
-    'ownedOrphan',
-    'conflict',
-    'unknown',
-  ]),
-  issues: list(text),
-  owned: z.boolean(),
-  privateAccessList: accessListSchema.optional(),
-  resolvedSubnet: subnetReferenceSchema.optional(),
-  desiredRoute: routeSchema.nullish(),
-});
+// Stable machine-readable code next to each issue's display prose. Clients
+// branch on the code; unknown codes from a newer server must still parse.
+export const issueDetailSchema = z.object({ code: text, message: text });
+export const itemSchema = z
+  .object({
+    cleanupSelectable: z.boolean().optional(),
+    canAddReservation: z.boolean().optional(),
+    reservationBlocked: text.optional(),
+    drift: z.array(driftSchema).optional(),
+    managedResources: z.array(existingResourceSchema).optional(),
+    canAcceptChanges: z.boolean().optional(),
+    acceptBlocked: text.optional(),
+    importAvailable: z.boolean().optional(),
+    importIssues: list(text).optional(),
+    existingRoute: routeSchema.optional(),
+    existingResources: list(
+      z.object({
+        kind: text,
+        id: text,
+        name: text,
+        summary: text,
+      }),
+    ).optional(),
+    routeUnavailable: z.boolean().optional(),
+    key: text,
+    state: z.enum([
+      'missing',
+      'healthy',
+      'mismatch',
+      'ownedOrphan',
+      'conflict',
+      'unknown',
+    ]),
+    issues: list(text),
+    issueDetails: list(issueDetailSchema),
+    owned: z.boolean(),
+    privateAccessList: accessListSchema.optional(),
+    resolvedSubnet: subnetReferenceSchema.optional(),
+    desiredRoute: routeSchema.nullish(),
+  })
+  .refine(
+    (item) =>
+      item.issueDetails.length === item.issues.length &&
+      item.issueDetails.every((detail, i) => detail.message === item.issues[i]),
+    {
+      message: 'Each issue needs a matching code in issueDetails.',
+      path: ['issueDetails'],
+    },
+  );
 const ownedResourceSchema = z.object({
   subnetId: text.optional(),
   id: text,

@@ -22,10 +22,50 @@ type ReconcileItem struct {
 	Key                string             `json:"key"`
 	State              string             `json:"state"`
 	Issues             []string           `json:"issues"`
+	IssueDetails       []IssueDetail      `json:"issueDetails"`
 	Owned              bool               `json:"owned"`
 	DesiredRoute       *RouteConfig       `json:"desiredRoute,omitempty"`
 	RouteUnavailable   bool               `json:"routeUnavailable,omitempty"`
 }
+
+// IssueDetail pairs an issue's display prose with a stable machine-readable
+// code. Clients branch on Code and render Message; Message wording may change.
+type IssueDetail struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// Issue codes are an API contract: add new codes, never repurpose one.
+const (
+	IssueReadIncomplete          = "readIncomplete"
+	IssueRouteUnavailable        = "routeUnavailable"
+	IssueSubnetUnresolved        = "subnetUnresolved"
+	IssueSubnetChanged           = "subnetChanged"
+	IssueIdentityChanged         = "identityChanged"
+	IssueOwnedChanged            = "ownedChanged"
+	IssueHostProfileMismatch     = "hostProfileMismatch"
+	IssueRouteLayoutChanged      = "routeLayoutChanged"
+	IssueForeignReferences       = "foreignReferences"
+	IssueRouteSpecInvalid        = "routeSpecInvalid"
+	IssueSharedAccessListChanged = "sharedAccessListChanged"
+	IssueOwnedMissing            = "ownedMissing"
+	IssueOwnedDiffers            = "ownedDiffers"
+	IssueUnownedConflict         = "unownedConflict"
+	IssueNotConfigured           = "notConfigured"
+	IssueImportBlocker           = "importBlocker"
+	IssueOperationIncomplete     = "operationIncomplete"
+	IssueVMIDReused              = "vmidReused"
+	IssuePrerequisitesMissing    = "prerequisitesMissing"
+	IssueCleanupConflict         = "cleanupConflict"
+	IssueOwnedOrphan             = "ownedOrphan"
+)
+
+// addIssue is the only way to record an issue, so prose and codes cannot diverge.
+func (i *ReconcileItem) addIssue(code, message string) {
+	i.Issues = append(i.Issues, message)
+	i.IssueDetails = append(i.IssueDetails, IssueDetail{Code: code, Message: message})
+}
+
 type Reconciliation struct {
 	ProtectedCandidates []ProtectedCandidate `json:"protectedCandidates,omitempty"`
 	Inventory           Inventory            `json:"inventory"`
@@ -74,7 +114,7 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 		own, owned := st.Owned[c.Key]
 		h, _ := st.Config.Host(c.HostID)
 		o := routerForHost(st.Config, h)
-		item := ReconcileItem{Key: c.Key, State: "missing", Issues: []string{}, Owned: owned}
+		item := ReconcileItem{Key: c.Key, State: "missing", Issues: []string{}, IssueDetails: []IssueDetail{}, Owned: owned}
 		if !failures[h.ID] {
 			subnet, err := resolveSubnet(snapshots[h.ID], h, c)
 			if err == nil {
@@ -125,40 +165,40 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 		}
 		if !inv.Complete || failures[h.ID] {
 			item.State = "unknown"
-			item.Issues = append(item.Issues, "complete inventory and provider reads are required")
+			item.addIssue(IssueReadIncomplete, "complete inventory and provider reads are required")
 		} else if owned && item.RouteUnavailable {
 			item.State = "mismatch"
-			item.Issues = append(item.Issues, "existing app upstream is unavailable; explicitly choose this app's scheme and port before repair")
+			item.addIssue(IssueRouteUnavailable, "existing app upstream is unavailable; explicitly choose this app's scheme and port before repair")
 		} else if owned {
 			item.State = "healthy"
 			if item.ResolvedSubnet == nil {
 				item.State = "mismatch"
-				item.Issues = append(item.Issues, "intended IPv4 must match exactly one configured KEA subnet")
+				item.addIssue(IssueSubnetUnresolved, "intended IPv4 must match exactly one configured KEA subnet")
 			} else if own.ResolvedSubnet != nil && *own.ResolvedSubnet != *item.ResolvedSubnet {
 				item.State = "mismatch"
-				item.Issues = append(item.Issues, "resolved KEA subnet changed since the recorded route")
+				item.addIssue(IssueSubnetChanged, "resolved KEA subnet changed since the recorded route")
 			}
 			if own.Identity != c.Identity || c.Identity == "" {
 				item.State = "conflict"
-				item.Issues = append(item.Issues, "container identity changed or unavailable")
+				item.addIssue(IssueIdentityChanged, "container identity changed or unavailable")
 			}
 			if e := checkOwned(own, snapshots[h.ID]); e != nil {
 				item.State = "mismatch"
-				item.Issues = append(item.Issues, "owned resources changed or are missing")
+				item.addIssue(IssueOwnedChanged, "owned resources changed or are missing")
 			}
 			_, e := desiredFields(o, c, h, own.Public)
 			if e != nil {
 				item.State = "mismatch"
-				item.Issues = append(item.Issues, "container does not match configured host profile")
+				item.addIssue(IssueHostProfileMismatch, "container does not match configured host profile")
 			} else {
 				if err := verifyRouteLayout(st, o, own, snapshots[h.ID]); err != nil {
 					item.State = "mismatch"
-					item.Issues = append(item.Issues, err.Error())
+					item.addIssue(IssueRouteLayoutChanged, err.Error())
 				}
 				if own.RouteLayout != nil {
 					if err := cleanupReferences(own, snapshots[h.ID]); err != nil {
 						item.State = "conflict"
-						item.Issues = append(item.Issues, err.Error())
+						item.addIssue(IssueForeignReferences, err.Error())
 					}
 				}
 				acl, _ := ownedByKind(own, "acl")
@@ -166,24 +206,24 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 				specs, err := ownedRouteSpecs(o, h, c, own, snapshots[h.ID], own.Public, acl.ID, site.ID)
 				if err != nil {
 					item.State = "mismatch"
-					item.Issues = append(item.Issues, err.Error())
+					item.addIssue(IssueRouteSpecInvalid, err.Error())
 				}
 				if err := verifySharedAccessList(o, snapshots[h.ID], own.SharedAccessList, own.Public); err != nil {
 					item.State = "mismatch"
-					item.Issues = append(item.Issues, err.Error())
+					item.addIssue(IssueSharedAccessListChanged, err.Error())
 				}
 				for kind, fields := range specs {
 					ref, _ := ownedByKind(own, kind)
 					r, exists := snapshots[h.ID].Find(ref.ID, kind)
 					if !exists {
 						item.State = "mismatch"
-						item.Issues = append(item.Issues, "missing owned "+kind)
+						item.addIssue(IssueOwnedMissing, "missing owned "+kind)
 						continue
 					}
 					for field, value := range fields {
 						if r.Fields[field] != value {
 							item.State = "mismatch"
-							item.Issues = append(item.Issues, kind+" differs from desired configuration")
+							item.addIssue(IssueOwnedDiffers, kind+" differs from desired configuration")
 							break
 						}
 					}
@@ -193,12 +233,12 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 			d, e := desiredFields(o, c, h, false)
 			if e != nil {
 				item.State = "conflict"
-				item.Issues = append(item.Issues, "container does not match host profile")
+				item.addIssue(IssueHostProfileMismatch, "container does not match host profile")
 			} else if e = checkConflicts(snapshots[h.ID], own, d); e != nil {
 				item.State = "conflict"
-				item.Issues = append(item.Issues, e.Error())
+				item.addIssue(IssueUnownedConflict, e.Error())
 			} else {
-				item.Issues = append(item.Issues, "dashboard-owned reservation and proxy are missing")
+				item.addIssue(IssueNotConfigured, "dashboard-owned reservation and proxy are missing")
 			}
 		}
 
@@ -210,7 +250,9 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 			item.ImportAvailable = candidate.eligible()
 			if len(candidate.Existing) > 0 {
 				item.State = "conflict"
-				item.Issues = append(item.Issues, candidate.Issues...)
+				for _, issue := range candidate.Issues {
+					item.addIssue(IssueImportBlocker, issue)
+				}
 			}
 		}
 		if inv.Complete && !failures[h.ID] && snapshots[h.ID].Ready {
@@ -223,7 +265,7 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 		for _, op := range out.Operations {
 			if op.Key == c.Key && op.Status != "succeeded" {
 				item.State = "mismatch"
-				item.Issues = append(item.Issues, "provider operation is incomplete; recovery required")
+				item.addIssue(IssueOperationIncomplete, "provider operation is incomplete; recovery required")
 			}
 		}
 		out.Items = append(out.Items, item)
@@ -232,7 +274,7 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 		if seen[k] {
 			continue
 		}
-		item := ReconcileItem{Key: k, State: "unknown", Issues: []string{}, Owned: true}
+		item := ReconcileItem{Key: k, State: "unknown", Issues: []string{}, IssueDetails: []IssueDetail{}, Owned: true}
 		if !failures[own.HostID] {
 			for _, ref := range own.Resources {
 				r, exists := snapshots[own.HostID].Find(ref.ID, ref.Kind)
@@ -249,24 +291,24 @@ func reconcile(st State, inv Inventory, routers routerObservations) Reconciliati
 			item.DesiredRoute = &route
 		}
 		if !inv.Complete || failures[own.HostID] {
-			item.Issues = append(item.Issues, "inventory/provider failure prevents orphan classification")
+			item.addIssue(IssueReadIncomplete, "inventory/provider failure prevents orphan classification")
 		} else if e := cleanupSafe(inv, own); e != nil {
 			item.State = "conflict"
-			item.Issues = append(item.Issues, "VMID exists elsewhere; possible migration or reuse")
+			item.addIssue(IssueVMIDReused, "VMID exists elsewhere; possible migration or reuse")
 		} else if _, e = existingOwnedResources(own, snapshots[own.HostID]); e != nil {
 			item.State = "mismatch"
-			item.Issues = append(item.Issues, "owned provider resources changed")
+			item.addIssue(IssueOwnedChanged, "owned provider resources changed")
 		} else if !snapshots[own.HostID].Ready {
-			item.Issues = append(item.Issues, "provider prerequisites unavailable")
+			item.addIssue(IssuePrerequisitesMissing, "provider prerequisites unavailable")
 		} else if e = cleanupDeletionReferences(own, snapshots[own.HostID]); e != nil {
 			item.State = "conflict"
-			item.Issues = append(item.Issues, "unrelated configuration references owned resources")
+			item.addIssue(IssueForeignReferences, "unrelated configuration references owned resources")
 		} else if e = cleanupTargetConflicts(inv, own, snapshots[own.HostID]); e != nil {
 			item.State = "conflict"
-			item.Issues = append(item.Issues, e.Error())
+			item.addIssue(IssueCleanupConflict, e.Error())
 		} else {
 			item.State = "ownedOrphan"
-			item.Issues = append(item.Issues, "fully observed inventory has no matching VMID; cleanup requires explicit plan")
+			item.addIssue(IssueOwnedOrphan, "fully observed inventory has no matching VMID; cleanup requires explicit plan")
 		}
 		if inv.Complete && !failures[own.HostID] && snapshots[own.HostID].Ready && cleanupSafe(inv, own) == nil {
 			_, err := existingOwnedResources(own, snapshots[own.HostID])

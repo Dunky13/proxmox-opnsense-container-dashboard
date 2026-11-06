@@ -27,6 +27,9 @@ import {
   containerViews,
   emptyFilters,
   formatTime,
+  inventoryExpired,
+  mismatchCounts,
+  uncertainJob,
   type Filters,
 } from './viewmodel';
 
@@ -247,9 +250,7 @@ function Dashboard({
     return () => clearInterval(timer);
   }, []);
   const stale =
-    !!observedData &&
-    (!Number.isFinite(Date.parse(observedData.inventory.observedAt)) ||
-      now - Date.parse(observedData.inventory.observedAt) > 5 * 60 * 1000);
+    !!observedData && inventoryExpired(observedData.inventory.observedAt, now);
   const data = useMemo(() => {
     if (!observedData) return observedData;
     const observed =
@@ -291,16 +292,9 @@ function Dashboard({
       /* The in-memory view still works when storage is blocked. */
     }
   }
-  const mismatchCount = data?.items.filter(
-    (item) => item.state !== 'healthy',
-  ).length;
+  const mismatchCount = data ? mismatchCounts(data).needsReview : undefined;
   const attention =
-    jobs.filter(
-      (job) =>
-        ['failed', 'timedOut', 'interrupted', 'rebootRequired'].includes(
-          job.status,
-        ) && !job.acknowledged,
-    ).length +
+    jobs.filter(uncertainJob).length +
     operations.filter(
       (op) => op.status === 'partial' || op.status === 'interrupted',
     ).length;

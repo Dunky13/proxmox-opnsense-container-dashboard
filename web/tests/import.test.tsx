@@ -5,7 +5,8 @@ import { App } from '../src/App';
 import { Api } from '../src/api';
 import { ContainerDetail, PlanReview } from '../src/ContainerDetail';
 import { itemSchema, planSchema, reconciliationSchema } from '../src/schemas';
-import { containerViews, importBlocked } from '../src/viewmodel';
+import { eligibility, reasonOf } from '../src/eligibility';
+import { containerViews, type JobAttemptState } from '../src/viewmodel';
 import {
   auth,
   container,
@@ -14,6 +15,7 @@ import {
   plan,
   reconciliation,
   settings,
+  withIssues,
 } from './fixtures';
 
 const route = { scheme: 'http', port: 8080, public: true };
@@ -21,7 +23,7 @@ const existing = itemSchema.parse({
   key: 'main:609',
   state: 'conflict',
   owned: false,
-  issues: ['unowned reservation or domain conflicts'],
+  ...withIssues('unownedConflict', ['unowned reservation or domain conflicts']),
   importAvailable: true,
   importIssues: [],
   existingRoute: route,
@@ -128,20 +130,38 @@ it('parses only the allowlisted existing-resource shape and preserves the metada
   ]);
 });
 
+function importReason(
+  view: Parameters<typeof eligibility>[0],
+  data: Parameters<typeof eligibility>[1]['data'],
+  jobs: Parameters<typeof eligibility>[1]['jobs'],
+  activityLoaded: boolean,
+  jobAttemptState?: JobAttemptState,
+) {
+  return reasonOf(
+    eligibility(view, {
+      data,
+      jobs,
+      activityLoaded,
+      jobAttemptState,
+      now: Date.now(),
+    }).import,
+  );
+}
+
 it('requires current identity, profile, complete observations and the union of operation/job guards for import', () => {
   const data = observation();
   const [view] = containerViews(data, settings);
   if (!view) throw new Error('Missing fixture view');
-  expect(importBlocked(view, data, [], true)).toBe('');
-  expect(importBlocked(view, data, [], false)).toMatch(/activity history/);
+  expect(importReason(view, data, [], true)).toBe('');
+  expect(importReason(view, data, [], false)).toMatch(/activity history/);
   expect(
-    importBlocked(view, data, [{ ...job, key: view.container.key }], true),
+    importReason(view, data, [{ ...job, key: view.container.key }], true),
   ).toMatch(/update is active/);
-  expect(importBlocked(view, data, [], true, 'uncertain')).toMatch(
+  expect(importReason(view, data, [], true, 'uncertain')).toMatch(
     /outcome inspection/,
   );
   expect(
-    importBlocked(
+    importReason(
       view,
       { ...data, operations: [{ ...partial, key: view.container.key }] },
       [],
@@ -149,7 +169,7 @@ it('requires current identity, profile, complete observations and the union of o
     ),
   ).toMatch(/incomplete network operation/);
   expect(
-    importBlocked(
+    importReason(
       { ...view, container: { ...view.container, identity: '' } },
       data,
       [],
@@ -157,7 +177,7 @@ it('requires current identity, profile, complete observations and the union of o
     ),
   ).toMatch(/generation is unverified/);
   expect(
-    importBlocked(
+    importReason(
       { ...view, container: { ...view.container, expectedIp: '192.168.6.10' } },
       data,
       [],
@@ -165,7 +185,7 @@ it('requires current identity, profile, complete observations and the union of o
     ),
   ).toMatch(/host profile/);
   expect(
-    importBlocked(
+    importReason(
       view,
       { ...data, inventory: { ...data.inventory, complete: false } },
       [],
@@ -173,7 +193,7 @@ it('requires current identity, profile, complete observations and the union of o
     ),
   ).toMatch(/complete inventory/);
   expect(
-    importBlocked(
+    importReason(
       view,
       {
         ...data,
@@ -187,7 +207,7 @@ it('requires current identity, profile, complete observations and the union of o
     ),
   ).toMatch(/complete inventory/);
   expect(
-    importBlocked(
+    importReason(
       {
         ...view,
         item: {
@@ -269,6 +289,8 @@ it('updates an untouched inspector when existing-route observations arrive, whil
     onClose: vi.fn(),
     onJobReviewRequest: vi.fn(),
     onJobAttemptState: vi.fn(),
+    readiness: null,
+    onReadiness: vi.fn(),
   };
   const { rerender } = render(
     <ContainerDetail {...props} view={first} data={initial} />,
@@ -353,9 +375,9 @@ it('keeps HTTP 8080 and hostname drift after importing observed native child res
                   state: 'mismatch',
                   importAvailable: false,
                   desiredRoute: route,
-                  issues: [
+                  ...withIssues('ownedDiffers', [
                     'DHCP hostname speedtest-tracker differs from hikyo; review a network change to align it.',
-                  ],
+                  ]),
                 },
               ],
             }
@@ -394,9 +416,11 @@ it('keeps HTTP 8080 and hostname drift after importing observed native child res
   expect(
     detail.getByText('a1111111-1111-4111-8111-111111111609'),
   ).toBeVisible();
+  // Server issue prose is shown as received; the client no longer hides it by
+  // matching legacy wording.
   expect(
-    detail.queryByText('unowned reservation or domain conflicts'),
-  ).not.toBeInTheDocument();
+    detail.getByText('unowned reservation or domain conflicts'),
+  ).toBeVisible();
   await user.click(
     detail.getByRole('button', { name: 'Review existing configuration' }),
   );

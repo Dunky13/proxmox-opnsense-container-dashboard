@@ -2,7 +2,15 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
-import { auth, job, partial, plan, reconciliation, settings } from './fixtures';
+import {
+  auth,
+  job,
+  partial,
+  plan,
+  reconciliation,
+  settings,
+  withIssues,
+} from './fixtures';
 
 function json(body: string, status = 200) {
   return new Response(body, {
@@ -400,9 +408,9 @@ describe('authentication and inventory', () => {
                   ? {
                       ...item,
                       state: 'conflict',
-                      issues: [
+                      ...withIssues('unownedConflict', [
                         'Container address differs from the host profile',
-                      ],
+                      ]),
                     }
                   : item,
               ),
@@ -649,9 +657,9 @@ describe('network plans and partial writes', () => {
                 ? {
                     ...item,
                     state: 'mismatch',
-                    issues: [
+                    ...withIssues('operationIncomplete', [
                       'Provider operation is incomplete; recovery required.',
-                    ],
+                    ]),
                   }
                 : item,
             ),

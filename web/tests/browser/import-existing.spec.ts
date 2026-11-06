@@ -7,6 +7,7 @@ import {
   plan,
   reconciliation,
   settings,
+  withIssues,
 } from '../fixtures';
 
 // Standalone: this file can run against the base UI using only its existing
@@ -207,11 +208,13 @@ async function install(page: Page) {
               key: 'main:609',
               state: control.imported ? 'mismatch' : 'conflict',
               owned: control.imported,
-              issues: control.imported
-                ? [
+              ...(control.imported
+                ? withIssues('ownedDiffers', [
                     'DHCP hostname speedtest-tracker differs from hikyo. Review a network change to align it.',
-                  ]
-                : ['unowned reservation or domain conflicts'],
+                  ])
+                : withIssues('unownedConflict', [
+                    'unowned reservation or domain conflicts',
+                  ])),
               desiredRoute: control.imported ? observedRoute : undefined,
               existingRoute: observedRoute,
               existingResources: resources,
@@ -317,7 +320,9 @@ for (const viewport of [
           await expect(inspector).toContainText('speedtest-tracker');
           await expect(inspector).toContainText('192.168.6.0/24');
           await expect(inspector).toContainText('http://192.168.6.9:8080');
-          await expect(inspector).not.toContainText(
+          // Server issue prose is shown as received; the client no longer hides
+          // it by matching legacy wording.
+          await expect(inspector).toContainText(
             'unowned reservation or domain conflicts',
           );
           await expect(inspector).not.toContainText('hikyo.dbugit.io');
